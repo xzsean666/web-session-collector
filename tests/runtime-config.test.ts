@@ -9,31 +9,31 @@ import {
 } from "../src/config/runtime-config.js";
 
 test("loadRuntimeConfig parses the complete MVP environment", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     const runtimeConfig = loadRuntimeConfig({
-      XHS_SITE: "xiaohongshu",
-      XHS_USER_DATA_DIR: userDataDir,
-      XHS_PROFILE_NAME: "automation-profile",
-      XHS_BROWSER_MODE: "connect",
-      XHS_CDP_URL: "http://127.0.0.1:9222",
-      XHS_HEADLESS: "true",
-      XHS_BROWSER_CHANNEL: "bundled",
-      XHS_EXECUTABLE_PATH: process.execPath,
-      XHS_PROFILE_DIRECTORY: "Profile 7",
-      XHS_LOCALE: "zh-CN",
-      XHS_TIMEZONE_ID: "Asia/Shanghai",
-      XHS_VIEWPORT_WIDTH: "1440",
-      XHS_VIEWPORT_HEIGHT: "900",
-      XHS_DEVICE_SCALE_FACTOR: "1.25",
-      XHS_BROWSER_FLAGS: "[\"--disable-blink-features=AutomationControlled\"]",
-      XHS_IGNORE_DEFAULT_ARGS:
+      APP_SITE: "xiaohongshu",
+      APP_USER_DATA_DIR: userDataDir,
+      APP_PROFILE_NAME: "automation-profile",
+      APP_BROWSER_MODE: "connect",
+      APP_CDP_URL: "http://127.0.0.1:9222",
+      APP_HEADLESS: "true",
+      APP_BROWSER_CHANNEL: "bundled",
+      APP_EXECUTABLE_PATH: process.execPath,
+      APP_PROFILE_DIRECTORY: "Profile 7",
+      APP_LOCALE: "zh-CN",
+      APP_TIMEZONE_ID: "Asia/Shanghai",
+      APP_VIEWPORT_WIDTH: "1440",
+      APP_VIEWPORT_HEIGHT: "900",
+      APP_DEVICE_SCALE_FACTOR: "1.25",
+      APP_BROWSER_FLAGS: "[\"--disable-blink-features=AutomationControlled\"]",
+      APP_IGNORE_DEFAULT_ARGS:
         "[\"--password-store=basic\",\"--use-mock-keychain\"]",
-      XHS_START_URL: "https://www.xiaohongshu.com/explore",
-      XHS_LOG_LEVEL: "debug",
-      XHS_KEEP_BROWSER_ALIVE: "yes",
-      XHS_INTERACTIVE_LOGIN_ON_MISSING_USER: "true"
+      APP_START_URL: "https://www.xiaohongshu.com/explore",
+      APP_LOG_LEVEL: "debug",
+      APP_KEEP_BROWSER_ALIVE: "yes",
+      APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "true"
     });
 
     assert.equal(runtimeConfig.site.siteKey, "xiaohongshu");
@@ -72,12 +72,12 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
 });
 
 test("loadRuntimeConfig applies safe defaults", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     const runtimeConfig = loadRuntimeConfig({
-      XHS_USER_DATA_DIR: userDataDir,
-      XHS_PROFILE_NAME: "automation-profile"
+      APP_USER_DATA_DIR: userDataDir,
+      APP_PROFILE_NAME: "automation-profile"
     });
 
     assert.equal(runtimeConfig.browser.headless, false);
@@ -108,39 +108,14 @@ test("loadRuntimeConfig applies safe defaults", () => {
   }
 });
 
-test("loadRuntimeConfig prefers generic environment names over compatibility aliases", () => {
-  const genericUserDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
-  const legacyUserDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
-
-  try {
-    const runtimeConfig = loadRuntimeConfig({
-      APP_SITE: "xiaohongshu",
-      APP_USER_DATA_DIR: genericUserDataDir,
-      APP_PROFILE_NAME: "generic-profile",
-      APP_HEADLESS: "true",
-      XHS_USER_DATA_DIR: legacyUserDataDir,
-      XHS_PROFILE_NAME: "legacy-profile",
-      XHS_HEADLESS: "false"
-    });
-
-    assert.equal(runtimeConfig.site.siteKey, "xiaohongshu");
-    assert.equal(runtimeConfig.profile.userDataDir, genericUserDataDir);
-    assert.equal(runtimeConfig.profile.profileName, "generic-profile");
-    assert.equal(runtimeConfig.browser.headless, true);
-  } finally {
-    rmSync(genericUserDataDir, { recursive: true, force: true });
-    rmSync(legacyUserDataDir, { recursive: true, force: true });
-  }
-});
-
 test("loadRuntimeConfig parses comma-separated browser flags", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     const runtimeConfig = loadRuntimeConfig({
-      XHS_USER_DATA_DIR: userDataDir,
-      XHS_PROFILE_NAME: "automation-profile",
-      XHS_BROWSER_FLAGS: "--disable-gpu, --no-sandbox"
+      APP_USER_DATA_DIR: userDataDir,
+      APP_PROFILE_NAME: "automation-profile",
+      APP_BROWSER_FLAGS: "--disable-gpu, --no-sandbox"
     });
 
     assert.deepEqual(runtimeConfig.browser.flags, [
@@ -154,7 +129,7 @@ test("loadRuntimeConfig parses comma-separated browser flags", () => {
 
 test("loadRuntimeConfig rejects missing required values", () => {
   assert.throws(
-    () => loadRuntimeConfig({ XHS_PROFILE_NAME: "automation-profile" }),
+    () => loadRuntimeConfig({ APP_PROFILE_NAME: "automation-profile" }),
     ConfigurationError
   );
 });
@@ -163,23 +138,23 @@ test("loadRuntimeConfig rejects relative profile paths", () => {
   assert.throws(
     () =>
       loadRuntimeConfig({
-        XHS_USER_DATA_DIR: "relative/path",
-        XHS_PROFILE_NAME: "automation-profile"
+        APP_USER_DATA_DIR: "relative/path",
+        APP_PROFILE_NAME: "automation-profile"
       }),
     ConfigurationError
   );
 });
 
 test("loadRuntimeConfig rejects invalid boolean values", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     assert.throws(
       () =>
         loadRuntimeConfig({
-          XHS_USER_DATA_DIR: userDataDir,
-          XHS_PROFILE_NAME: "automation-profile",
-          XHS_HEADLESS: "sometimes"
+          APP_USER_DATA_DIR: userDataDir,
+          APP_PROFILE_NAME: "automation-profile",
+          APP_HEADLESS: "sometimes"
         }),
       ConfigurationError
     );
@@ -189,15 +164,15 @@ test("loadRuntimeConfig rejects invalid boolean values", () => {
 });
 
 test("loadRuntimeConfig rejects invalid start URLs", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     assert.throws(
       () =>
         loadRuntimeConfig({
-          XHS_USER_DATA_DIR: userDataDir,
-          XHS_PROFILE_NAME: "automation-profile",
-          XHS_START_URL: "not-a-url"
+          APP_USER_DATA_DIR: userDataDir,
+          APP_PROFILE_NAME: "automation-profile",
+          APP_START_URL: "not-a-url"
         }),
       ConfigurationError
     );
@@ -207,15 +182,15 @@ test("loadRuntimeConfig rejects invalid start URLs", () => {
 });
 
 test("loadRuntimeConfig rejects invalid CDP URLs", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     assert.throws(
       () =>
         loadRuntimeConfig({
-          XHS_USER_DATA_DIR: userDataDir,
-          XHS_PROFILE_NAME: "automation-profile",
-          XHS_CDP_URL: "not-a-url"
+          APP_USER_DATA_DIR: userDataDir,
+          APP_PROFILE_NAME: "automation-profile",
+          APP_CDP_URL: "not-a-url"
         }),
       ConfigurationError
     );
@@ -225,15 +200,15 @@ test("loadRuntimeConfig rejects invalid CDP URLs", () => {
 });
 
 test("loadRuntimeConfig rejects invalid viewport values", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     assert.throws(
       () =>
         loadRuntimeConfig({
-          XHS_USER_DATA_DIR: userDataDir,
-          XHS_PROFILE_NAME: "automation-profile",
-          XHS_VIEWPORT_WIDTH: "wide"
+          APP_USER_DATA_DIR: userDataDir,
+          APP_PROFILE_NAME: "automation-profile",
+          APP_VIEWPORT_WIDTH: "wide"
         }),
       ConfigurationError
     );
@@ -261,15 +236,15 @@ test("loadRuntimeConfig reports invalid ignore-default-args JSON with the right 
 });
 
 test("loadRuntimeConfig rejects relative executable paths", () => {
-  const userDataDir = mkdtempSync(path.join(tmpdir(), "xhs-profile-"));
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
 
   try {
     assert.throws(
       () =>
         loadRuntimeConfig({
-          XHS_USER_DATA_DIR: userDataDir,
-          XHS_PROFILE_NAME: "automation-profile",
-          XHS_EXECUTABLE_PATH: "relative/chrome"
+          APP_USER_DATA_DIR: userDataDir,
+          APP_PROFILE_NAME: "automation-profile",
+          APP_EXECUTABLE_PATH: "relative/chrome"
         }),
       ConfigurationError
     );

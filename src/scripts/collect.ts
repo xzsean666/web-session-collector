@@ -68,13 +68,10 @@ async function main(): Promise<void> {
   const siteAdapter = getSearchSiteAdapter(cliOptions.siteKey);
   const runtimeConfig = loadRuntimeConfig({
     ...process.env,
-    APP_HEADLESS: cliOptions.headed ? "false" : process.env.APP_HEADLESS,
-    XHS_HEADLESS: cliOptions.headed ? "false" : process.env.XHS_HEADLESS
+    APP_HEADLESS: cliOptions.headed ? "false" : process.env.APP_HEADLESS
   });
   const logger = createLogger({
-    level: parseSearchLogLevel(
-      process.env.APP_SEARCH_LOG_LEVEL ?? process.env.XHS_SEARCH_LOG_LEVEL
-    )
+    level: parseSearchLogLevel(process.env.APP_SEARCH_LOG_LEVEL)
   });
   let browserSession: BrowserSession | undefined;
   let pageSession: PageSession | undefined;
@@ -157,20 +154,18 @@ function parseCliOptions(rawArguments: readonly string[]): CollectCliOptions {
   let taskName: CollectTaskName = parseTaskName(process.env.APP_TASK, "APP_TASK");
   let siteKey =
     process.env.APP_SEARCH_SITE ??
-    process.env.XHS_SEARCH_SITE ??
     process.env.APP_SITE ??
-    process.env.XHS_SITE ??
     "xiaohongshu";
   let recentDays = parseNumberOption(
-    process.env.APP_SEARCH_RECENT_DAYS ?? process.env.XHS_SEARCH_RECENT_DAYS,
+    process.env.APP_SEARCH_RECENT_DAYS,
     30
   );
   let limitPerKeyword = parseNumberOption(
-    process.env.APP_SEARCH_LIMIT ?? process.env.XHS_SEARCH_LIMIT,
+    process.env.APP_SEARCH_LIMIT,
     10
   );
   let scrollCount = parseNumberOption(
-    process.env.APP_SEARCH_SCROLLS ?? process.env.XHS_SEARCH_SCROLLS,
+    process.env.APP_SEARCH_SCROLLS,
     2
   );
   let json = false;
@@ -499,14 +494,15 @@ function parseTaskName(
 
 function printHelp(): void {
   console.log(`Usage:
-  pnpm run collect -- --task=search [--site=xiaohongshu] <关键词...>
-  pnpm run collect
+  pnpm run collect:xiaohongshu -- <关键词...>
+  pnpm run collect -- --site=xiaohongshu [--task=search] <关键词...>
+  pnpm run collect -- --site=xiaohongshu
 
 Examples:
-  pnpm run collect -- 咖啡 成都
-  pnpm run collect -- --task=search --site=xiaohongshu 咖啡 成都
-  pnpm run collect -- "咖啡,露营,上海" --days=14 --limit=8
-  pnpm run collect -- 咖啡 --headed
+  pnpm run collect:xiaohongshu -- 咖啡 成都
+  pnpm run collect -- --site=xiaohongshu --task=search 咖啡 成都
+  pnpm run collect:xiaohongshu -- "咖啡,露营,上海" --days=14 --limit=8
+  pnpm run collect:xiaohongshu -- 咖啡 --headed
 
 Options:
   --task <name>        采集任务，当前支持 search

@@ -151,8 +151,8 @@ Configuration rules:
   mode; it must not attempt to log in inside a headless browser
 - collect CLI search-task configuration is loaded by `src/scripts/collect.ts`
   and must not change the MVP runtime behavior
-- reusable core configuration uses generic `APP_*` names; this project maps
-  `XHS_*` variables into the generic core config for compatibility
+- reusable core configuration uses generic `APP_*` names; this project applies
+  site defaults before passing configuration into the core parser
 - site-specific URLs, selectors, notices, and date parsing must live under
   `src/sites/<site>/`, not under `src/core/`
 

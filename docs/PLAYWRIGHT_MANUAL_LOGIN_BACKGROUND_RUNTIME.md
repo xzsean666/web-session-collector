@@ -702,8 +702,7 @@ APP_START_URL
 APP_INTERACTIVE_LOGIN_ON_MISSING_USER
 ```
 
-Projects may add compatibility aliases, but the reusable runtime should keep
-one generic configuration contract internally.
+The reusable runtime should keep one generic configuration contract internally.
 
 Example isolated profile path:
 

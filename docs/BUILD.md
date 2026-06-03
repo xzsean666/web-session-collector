@@ -156,8 +156,7 @@ Notes:
   `APP_SEARCH_LOG_LEVEL` are used by the `search` task in `pnpm run collect`.
   They do not affect the MVP runtime.
 - `APP_SEARCH_SITE` selects the site adapter used by `pnpm run collect`.
-- `XHS_*` names remain supported as compatibility aliases. Prefer `APP_*` for
-  new code and documentation.
+- Environment configuration uses `APP_*` names only.
 
 ## Run Commands
 
@@ -166,6 +165,7 @@ Available commands:
 ```text
 pnpm run dev
 pnpm run collect
+pnpm run collect:xiaohongshu
 pnpm run build
 pnpm run start
 pnpm run check
@@ -177,6 +177,8 @@ Meanings:
 - `pnpm run dev`: run the framework in development mode
 - `pnpm run collect`: run a selected collection task through a selected site
   adapter; the current implemented task is `search`
+- `pnpm run collect:xiaohongshu`: run collection with the Xiaohongshu site
+  adapter selected explicitly
 - `pnpm run build`: compile TypeScript into `dist/`
 - `pnpm run start`: run the compiled framework
 - `pnpm run check`: run TypeScript type checking without emit
@@ -195,13 +197,13 @@ pnpm run dev
 Keyword search examples:
 
 ```text
-pnpm run collect -- 咖啡 成都
-pnpm run collect -- --task=search 咖啡 成都
+pnpm run collect:xiaohongshu -- 咖啡 成都
 pnpm run collect -- --site=xiaohongshu 咖啡 成都
-pnpm run collect -- "咖啡,露营,上海" --days=14 --limit=8
-pnpm run collect -- 咖啡 --scrolls=4
-pnpm run collect -- 咖啡 --headed
-pnpm run collect -- 咖啡 --json
+pnpm run collect -- --site=xiaohongshu --task=search 咖啡 成都
+pnpm run collect:xiaohongshu -- "咖啡,露营,上海" --days=14 --limit=8
+pnpm run collect:xiaohongshu -- 咖啡 --scrolls=4
+pnpm run collect:xiaohongshu -- 咖啡 --headed
+pnpm run collect:xiaohongshu -- 咖啡 --json
 ```
 
 Search behavior:

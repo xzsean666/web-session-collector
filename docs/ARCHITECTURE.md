@@ -606,8 +606,8 @@ Strategy:
 10. Use pnpm only and keep the project workspace-compatible from the start.
 11. Default to the branded Chrome channel for Chrome profile reuse. Use the
     `bundled` channel only for Playwright-managed Chromium profiles.
-12. Keep `src/core/` free of site names, URLs, selectors, UI text, and legacy
-    compatibility environment names.
+12. Keep `src/core/` free of site names, URLs, selectors, UI text, and
+    site-specific configuration names.
 
 ## Current Phase Acceptance Criteria
 

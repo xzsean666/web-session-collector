@@ -34,7 +34,7 @@ Latest known successful validation before this handoff:
 
 - `pnpm run check`
 - `pnpm run test`
-- `pnpm run collect -- --task=search --site=xiaohongshu 咖啡 --days=30 --limit=2 --scrolls=1`
+- `pnpm run collect:xiaohongshu -- 咖啡 --days=30 --limit=2 --scrolls=1`
 - `pnpm run dev` with the isolated automation profile
 - current account was found in the isolated profile
 
@@ -55,8 +55,7 @@ Core boundary:
 
 Project and site boundary:
 
-- `src/config/runtime-config.ts`: project compatibility wrapper and `XHS_*`
-  alias support
+- `src/config/runtime-config.ts`: project defaults for runtime configuration
 - `src/runtime/runtime.ts`: lifecycle orchestration through
   `RuntimeSiteAdapter`
 - `src/sites/site-registry.ts`: runtime and search adapter registration
@@ -68,7 +67,7 @@ Rule to preserve:
 
 ```text
 src/core must not contain Xiaohongshu URLs, selectors, UI labels, date parsing,
-or XHS_* compatibility names.
+or site-specific configuration names.
 ```
 
 ## Completed Parts
@@ -100,7 +99,7 @@ Implementation:
 - `src/sites/xiaohongshu/current-user-action.ts`: Xiaohongshu current account
   extraction
 - `src/sites/xiaohongshu/search-adapter.ts`: Xiaohongshu search adapter
-- `tests/runtime-config.test.ts`: config parsing, defaults, and alias tests
+- `tests/runtime-config.test.ts`: config parsing, defaults, and validation tests
 
 ## Current Configuration Convention
 
@@ -119,11 +118,7 @@ APP_TASK=search
 APP_SEARCH_SITE=xiaohongshu
 ```
 
-Compatibility:
-
-- `XHS_*` names still work through `src/config/runtime-config.ts`
-- generic `APP_*` values take precedence when both generic and compatibility
-  names are present
+Only `APP_*` environment names are supported.
 
 ## Pending Tasks
 
@@ -131,7 +126,7 @@ Immediate validation for the next session:
 
 1. Run `pnpm run check`.
 2. Run `pnpm run test`.
-3. Run `pnpm run collect -- --task=search --site=xiaohongshu 咖啡 --days=30 --limit=2 --scrolls=1`.
+3. Run `pnpm run collect:xiaohongshu -- 咖啡 --days=30 --limit=2 --scrolls=1`.
 4. Optionally run `pnpm run dev` if browser validation is needed.
 5. Confirm no automation Chrome process remains after validation.
 

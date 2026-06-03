@@ -104,7 +104,7 @@ Do not push unless explicitly requested.
 The planned source tree must keep these responsibilities separate:
 
 - `src/core/config/`: reusable `APP_*` environment parsing and validation
-- `src/config/`: project compatibility mapping, including `XHS_*` aliases
+- `src/config/`: project runtime defaults layered over core configuration
 - `src/runtime/`: boot, run, shutdown lifecycle orchestration
 - `src/core/browser/`: Playwright browser and persistent context creation
 - `src/core/context/`: page/session abstractions created from the browser context
@@ -118,9 +118,9 @@ The planned source tree must keep these responsibilities separate:
 - `src/types/`: project-level result contracts
 - `src/scripts/`: operational scripts that do not belong in application modules
 
-Core code must not contain Xiaohongshu URLs, selectors, UI labels, or `XHS_*`
-configuration names. Add or change site behavior through `src/sites/<site>/`
-and `src/sites/site-registry.ts`.
+Core code must not contain Xiaohongshu URLs, selectors, UI labels, or
+site-specific configuration names. Add or change site behavior through
+`src/sites/<site>/` and `src/sites/site-registry.ts`.
 
 ## Dependency Policy
 

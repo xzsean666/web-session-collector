@@ -1,1 +1,1 @@
-pnpm run collect -- 咖啡 成都
+pnpm run collect:xiaohongshu -- 咖啡 成都

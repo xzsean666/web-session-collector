@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "collect": "tsx src/scripts/collect.ts",
+    "collect:xiaohongshu": "tsx src/scripts/collect.ts --site=xiaohongshu",
     "search": "tsx src/scripts/collect.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/main.js",
