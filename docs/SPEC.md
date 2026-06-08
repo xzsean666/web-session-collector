@@ -2,10 +2,9 @@
 
 ## Current Step
 
-Step 2: Documentation.
+Step 5: Background browser API service.
 
-This document defines the system specification for the current project phase. It
-contains no implementation code.
+This document defines the system specification for the current project phase.
 
 ## Purpose
 
@@ -15,7 +14,8 @@ automation and data collection tasks. The reusable browser runtime lives in
 `src/sites/<site>/`.
 
 The current phase focuses on framework initialization, profile verification,
-current account detection, and a keyword search MVP.
+current account detection, a keyword search MVP, and a local HTTP API that keeps
+one visible browser alive across requests.
 
 ## Current Phase Scope
 
@@ -30,16 +30,21 @@ The current phase must support:
 - printing the configured profile and current account information
 - running keyword search through a selected site adapter
 - keeping the browser alive for manual inspection when requested
+- running a background API service backed by one long-lived visible browser
+- returning `409 task_busy` when a search is already active
+- reporting logged-out and verification-required session states
+- running in Docker with noVNC for manual login and persistent Chrome user data
 - shutting down cleanly when the process exits
 
 The current phase must not include:
 
 - account login
+- captcha solving, verification bypass, fingerprint spoofing, or stealth patches
 - storage adapters
 - proxy support
 - queue or scheduler
 - distributed execution
-- UI
+- UI beyond noVNC access to the visible browser
 - plugin system
 
 ## Technology Choices
@@ -53,6 +58,8 @@ The current phase must not include:
 | Configuration | Environment variables | Required |
 | Schema validation | Zod | Implemented |
 | Structured logging | Pino | Implemented |
+| HTTP API | Node built-in `http` | Implemented |
+| Docker desktop access | Xvfb, x11vnc, noVNC | Implemented |
 | Queue layer | TBD | Future phase |
 | Storage layer | TBD | Future phase |
 | Monitoring | TBD beyond logs | Future phase |
@@ -104,7 +111,16 @@ Minimum configuration:
 | `APP_START_URL` | No | Page opened after profile verification, defaults to selected site adapter start URL |
 | `APP_LOG_LEVEL` | No | Structured log level, defaults to `info` |
 | `APP_KEEP_BROWSER_ALIVE` | No | Whether to keep browser open for manual inspection, defaults to `false` |
-| `APP_INTERACTIVE_LOGIN_ON_MISSING_USER` | No | Whether to open a headed login window after a headless missing-user result, defaults to `false` |
+| `APP_INTERACTIVE_LOGIN_ON_MISSING_USER` | No | Legacy one-shot runtime fallback after a headless missing-user result; defaults to `false` and is not used by API mode |
+
+API service configuration:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `APP_API_HOST` | No | API listen host, defaults to `0.0.0.0` |
+| `APP_API_PORT` | No | API listen port, defaults to `10085` |
+| `APP_API_REQUEST_BODY_LIMIT_BYTES` | No | Maximum JSON body size, defaults to `1048576` |
+| `APP_ACCOUNT_CHECK_INTERVAL_MS` | No | Idle session monitor interval, defaults to `60000`; `0` disables scheduled checks |
 
 Collect CLI search-task configuration:
 
@@ -142,15 +158,18 @@ Configuration rules:
 - `APP_PROFILE_DIRECTORY` should be used instead of embedding
   `--profile-directory` inside `APP_BROWSER_FLAGS`
 - browser locale, timezone, viewport, and device scale factor must be applied
-  through browser context options so headed login and headless runs share one
-  consistent desktop environment
+  through browser context options so manual login, API runs, and Docker noVNC
+  share one consistent desktop environment
 - `APP_IGNORE_DEFAULT_ARGS` should be used sparingly because removing required
   Playwright defaults can break automation
 - `APP_START_URL` must use `http` or `https`
-- `APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true` is only supported in `launch`
-  mode; it must not attempt to log in inside a headless browser
+- `APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true` is only for the one-shot runtime
+  in `launch` mode; API mode uses the already visible browser instead
 - collect CLI search-task configuration is loaded by `src/scripts/collect.ts`
   and must not change the MVP runtime behavior
+- API service configuration is loaded by `src/api/api-config.ts`
+- background API mode must keep the browser open until service shutdown
+- API search execution must be single-flight per background browser service
 - reusable core configuration uses generic `APP_*` names; this project applies
   site defaults before passing configuration into the core parser
 - site-specific URLs, selectors, notices, and date parsing must live under
@@ -187,6 +206,61 @@ Failure mode:
 
 - logs top-level failure, closes resources, exits with non-zero status
 
+### API Service
+
+Input:
+
+- validated runtime configuration
+- validated API configuration
+- HTTP requests
+
+Output:
+
+- JSON responses
+- active task and session status
+
+Failure mode:
+
+- invalid request bodies return `400`
+- oversized request bodies return `413`
+- a second active search returns `409 task_busy`
+- logged-out sessions return `428 login_required`
+- verification or risk-control states return `423 verification_required`
+- service startup failures are logged and exit non-zero
+
+Endpoints:
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/health` | Returns service lifecycle and active task summary |
+| `GET` | `/api/status` | Returns browser, page, active task, last task, monitor, and session status |
+| `GET` | `/api/sites/search` | Lists registered search adapters |
+| `POST` | `/api/session/check` | Runs an immediate session inspection when the page is idle |
+| `POST` | `/api/xiaohongshu/search` | Runs a Xiaohongshu keyword search on the existing browser page |
+
+`POST /api/xiaohongshu/search` request body:
+
+```json
+{
+  "keyword": "咖啡",
+  "keywords": ["咖啡", "成都"],
+  "recentDays": 30,
+  "limit": 10,
+  "scrollCount": 2
+}
+```
+
+Rules:
+
+- `keyword`, `q`, or `keywords` must provide at least one keyword
+- `limit` and `limitPerKeyword` are equivalent; `limitPerKeyword` wins when
+  both are provided
+- one request runs synchronously and returns the search result when complete
+- another search request during an active search returns the current running
+  task snapshot instead of starting work
+- the API does not store results
+- the API does not expose cookies, tokens, local storage, or raw browser state
+
 ### Browser
 
 Input:
@@ -208,6 +282,12 @@ Output:
 Failure mode:
 
 - profile load or browser startup failure is non-recoverable
+
+Rules:
+
+- default browser mode is visible (`APP_HEADLESS=false`)
+- browser contexts in API mode remain open until service shutdown
+- Docker mode uses the same persistent user data directory across restarts
 
 ### Context
 
@@ -340,6 +420,30 @@ Reusable core boundary:
 - `src/core/search/search-workflow.ts` must not contain Xiaohongshu URLs,
   selectors, text labels, or date parsing assumptions
 
+### Session Inspection
+
+Input:
+
+- page session
+- selected runtime site adapter
+
+Output:
+
+- session state
+- current account result when found
+- indicator list
+- page URL and title
+
+Expected behavior:
+
+- reports `logged_in` when a current account is visible
+- reports `logged_out` when login prompts or login URLs are detected
+- reports `challenge_required` when verification, captcha, frequent-access, or
+  account-risk prompts are detected
+- reports `browser_closed` when the page is no longer available
+- detects and reports only; it must not solve captcha, automate login, or bypass
+  verification
+
 ### Transform
 
 Input:
@@ -417,6 +521,19 @@ RuntimeConfig
   logging.level
 ```
 
+API configuration:
+
+```text
+ApiConfig
+  host
+  port
+  requestBodyLimitBytes
+  accountCheckIntervalMs
+  searchDefaults.recentDays
+  searchDefaults.limitPerKeyword
+  searchDefaults.scrollCount
+```
+
 Current account result:
 
 ```text
@@ -432,6 +549,48 @@ CurrentAccountResult
   metadata
   startedAt
   completedAt
+```
+
+Session inspection result:
+
+```text
+SessionInspectionResult
+  siteKey
+  state
+  checkedAt
+  pageUrl
+  pageTitle
+  currentAccount
+  indicators[]
+    code
+    severity
+    message
+  errorMessage
+```
+
+Session states:
+
+```text
+unknown
+logged_in
+logged_out
+challenge_required
+browser_closed
+error
+```
+
+Background task snapshot:
+
+```text
+BackgroundTaskSnapshot
+  id
+  type
+  state
+  startedAt
+  completedAt
+  input
+  resultSummary
+  error
 ```
 
 Profile verification result:
@@ -475,10 +634,19 @@ Run profile verification action
 Open configured start URL
         |
         v
-Print profile and current account information
+Inspect session state
         |
         v
-Keep browser alive or shutdown
+Serve API requests while keeping browser open
+        |
+        v
+Run one search task at a time
+        |
+        v
+Run scheduled session inspection while idle
+        |
+        v
+Shutdown signal received
         |
         v
 Close browser context
@@ -513,7 +681,7 @@ Current phase behavior:
 
 ## Acceptance Criteria
 
-Step 4 implementation will be accepted when:
+Step 5 implementation will be accepted when:
 
 - `pnpm install` succeeds
 - runtime configuration can be loaded from environment variables
@@ -522,9 +690,14 @@ Step 4 implementation will be accepted when:
 - profile name and user data directory are printed through structured logs
 - a browser page is available after context creation
 - configured start URL can be opened
-- browser can remain open when keep-alive mode is enabled
-- pressing Enter during keep-alive closes the browser cleanly
-- resources close cleanly when keep-alive mode is disabled or interrupted
+- API service can keep the visible browser open across requests
+- `POST /api/xiaohongshu/search` returns search results
+- concurrent search requests return `409 task_busy`
+- `/api/status` reports active task, last task, browser page, and session state
+- session inspection can report logged-out and verification-required states
+- Docker compose starts API and noVNC
+- Docker compose persists `/data/chrome-user-data`
+- resources close cleanly when the API service is interrupted
 
 ## Phase Roadmap
 

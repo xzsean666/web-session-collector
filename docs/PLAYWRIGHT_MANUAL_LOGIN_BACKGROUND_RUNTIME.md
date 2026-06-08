@@ -1,5 +1,9 @@
 # Playwright Manual Login Background Runtime Pattern
 
+Status: legacy reference pattern. The current web-session-collector API service
+does not use this lifecycle by default; it starts one visible persistent browser
+with `APP_HEADLESS=false` and keeps it open until service shutdown.
+
 ## Purpose
 
 This document defines a reusable design pattern for projects that need browser
@@ -466,7 +470,7 @@ Generic variable names for new projects:
 APP_USER_DATA_DIR=~/.cache/<project-name>/chrome-user-data
 APP_PROFILE_NAME=isolated-automation
 APP_BROWSER_MODE=launch
-APP_HEADLESS=true
+APP_HEADLESS=false
 APP_BROWSER_CHANNEL=chrome
 APP_EXECUTABLE_PATH=/opt/google/chrome/google-chrome
 APP_PROFILE_DIRECTORY=Default
@@ -476,7 +480,7 @@ APP_VIEWPORT_WIDTH=1366
 APP_VIEWPORT_HEIGHT=768
 APP_DEVICE_SCALE_FACTOR=1
 APP_START_URL=https://example.com/
-APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true
+APP_INTERACTIVE_LOGIN_ON_MISSING_USER=false
 APP_BROWSER_FLAGS='["--no-first-run","--no-default-browser-check"]'
 APP_IGNORE_DEFAULT_ARGS='[]'
 ```

@@ -1,0 +1,7 @@
+.env
+.git
+dist
+node_modules
+docker-data
+npm-debug.log
+pnpm-debug.log

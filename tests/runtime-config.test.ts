@@ -27,9 +27,8 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
       APP_VIEWPORT_WIDTH: "1440",
       APP_VIEWPORT_HEIGHT: "900",
       APP_DEVICE_SCALE_FACTOR: "1.25",
-      APP_BROWSER_FLAGS: "[\"--disable-blink-features=AutomationControlled\"]",
-      APP_IGNORE_DEFAULT_ARGS:
-        "[\"--password-store=basic\",\"--use-mock-keychain\"]",
+      APP_BROWSER_FLAGS: "[\"--no-first-run\"]",
+      APP_IGNORE_DEFAULT_ARGS: "[\"--disable-extensions\"]",
       APP_START_URL: "https://www.xiaohongshu.com/explore",
       APP_LOG_LEVEL: "debug",
       APP_KEEP_BROWSER_ALIVE: "yes",
@@ -52,12 +51,9 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
       height: 900
     });
     assert.equal(runtimeConfig.browser.deviceScaleFactor, 1.25);
-    assert.deepEqual(runtimeConfig.browser.flags, [
-      "--disable-blink-features=AutomationControlled"
-    ]);
+    assert.deepEqual(runtimeConfig.browser.flags, ["--no-first-run"]);
     assert.deepEqual(runtimeConfig.browser.ignoredDefaultArgs, [
-      "--password-store=basic",
-      "--use-mock-keychain"
+      "--disable-extensions"
     ]);
     assert.equal(
       runtimeConfig.navigation.startUrl,

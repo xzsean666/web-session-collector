@@ -1,0 +1,42 @@
+services:
+  xiaohongshu-api:
+    build:
+      context: .
+    shm_size: "2gb"
+    ports:
+      - "0.0.0.0:${APP_API_PORT:-10085}:${APP_API_PORT:-10085}"
+      - "0.0.0.0:${NOVNC_PORT:-10086}:${NOVNC_PORT:-10086}"
+    environment:
+      VNC_PASSWORD: "${VNC_PASSWORD:-}"
+      NOVNC_PORT: "${NOVNC_PORT:-10086}"
+      APP_SITE: xiaohongshu
+      APP_USER_DATA_DIR: /data/chrome-user-data
+      APP_PROFILE_NAME: docker-xiaohongshu
+      APP_BROWSER_MODE: launch
+      APP_HEADLESS: "false"
+      APP_BROWSER_CHANNEL: bundled
+      APP_EXECUTABLE_PATH: ""
+      APP_PROFILE_DIRECTORY: Default
+      APP_LOCALE: zh-CN
+      APP_TIMEZONE_ID: Asia/Shanghai
+      APP_VIEWPORT_WIDTH: "1366"
+      APP_VIEWPORT_HEIGHT: "768"
+      APP_DEVICE_SCALE_FACTOR: "1"
+      APP_START_URL: https://www.xiaohongshu.com/
+      APP_LOG_LEVEL: info
+      APP_KEEP_BROWSER_ALIVE: "false"
+      APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "false"
+      APP_BROWSER_FLAGS: '["--no-first-run","--no-default-browser-check","--disable-dev-shm-usage","--no-sandbox"]'
+      APP_IGNORE_DEFAULT_ARGS: "[]"
+      APP_API_HOST: 0.0.0.0
+      APP_API_PORT: "${APP_API_PORT:-10085}"
+      APP_ACCOUNT_CHECK_INTERVAL_MS: "60000"
+      APP_SEARCH_RECENT_DAYS: "90"
+      APP_SEARCH_LIMIT: "30"
+      APP_SEARCH_SCROLLS: "5"
+    volumes:
+      - chrome-user-data:/data/chrome-user-data
+    restart: unless-stopped
+
+volumes:
+  chrome-user-data:

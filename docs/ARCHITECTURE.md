@@ -2,11 +2,10 @@
 
 ## Current Step
 
-Step 1: Architecture Design.
+Step 5: Background browser API service.
 
 This document defines the architecture, module responsibilities, data flow, and
-key design decisions for the current project phase. It intentionally contains no
-implementation code.
+key design decisions for the current project phase.
 
 ## Overall System Architecture
 
@@ -20,7 +19,10 @@ and visible date parsing.
 Configuration Layer
         |
         v
-Runtime Layer
+API / Runtime Layer
+        |
+        v
+Background Browser Service
         |
         v
 Site Adapter Layer
@@ -37,10 +39,6 @@ Action Layer
         v
 Transform Layer
         |
-        v
-Storage Layer
-        |
-        v
 Monitoring Layer
 ```
 
@@ -50,25 +48,52 @@ Current phase scope:
 Load configuration
         |
         v
-Load existing Chrome profile
+Start API service
         |
         v
-Create persistent browser context
+Load persistent Chrome profile
         |
         v
-Verify context availability
+Create visible persistent browser context
         |
         v
 Open configured start URL
         |
         v
-Print current profile information
+Inspect login / verification state
         |
         v
-Run adapter search workflow
+Wait for API requests
         |
         v
-Keep browser alive
+Run one search task at a time
+        |
+        v
+Return result or busy/account-attention status
+        |
+        v
+Keep browser open until service shutdown
+```
+
+Docker deployment scope:
+
+```text
+Docker container
+        |
+        v
+Xvfb desktop + fluxbox
+        |
+        v
+Visible Chrome with persistent /data/chrome-user-data
+        |
+        v
+x11vnc + noVNC for manual login
+        |
+        v
+HTTP API service
+        |
+        v
+Caller invokes Xiaohongshu search API
 ```
 
 ## Planned Directory Structure
@@ -82,6 +107,7 @@ docs/
   INTEGRATION_DOCS.md
   nextsession.md
 src/
+  api/
   core/
     actions/
     browser/
@@ -98,6 +124,9 @@ src/
   storage/
   types/
   scripts/
+docker/
+Dockerfile
+docker-compose.yml
 ```
 
 Core modules contain reusable browser lifecycle, page lifecycle, config,
@@ -146,6 +175,42 @@ Rules:
 - configuration must be centralized
 - invalid configuration is non-recoverable and must fail fast
 - modules must receive configuration explicitly
+
+### API Module
+
+Purpose:
+
+- expose a local HTTP API for browser-backed tasks
+- keep one background browser service alive for the process lifetime
+- return explicit busy or account-attention responses instead of queueing
+  unbounded work
+
+Input:
+
+- HTTP requests
+- validated API configuration
+- background browser service status
+
+Output:
+
+- JSON API responses
+- task result payloads
+- session status payloads
+
+Dependencies:
+
+- Node HTTP server
+- API configuration
+- background browser service
+- logger
+
+Rules:
+
+- API routes must not create browser contexts directly
+- when a search task is running, another search request returns `409`
+- when the session monitor reports logged out or verification required, search
+  requests return an account-attention response
+- API output must not expose cookies, tokens, local storage, or raw session data
 
 ### Runtime Module
 
@@ -210,6 +275,8 @@ Rules:
 - profile path handling must be explicit
 - same profile directory must not be used by multiple browser instances
 - connect mode must disconnect from Chrome without closing the user's browser
+- launch mode defaults to a visible browser, not headless
+- do not add fingerprint spoofing or verification-bypass launch behavior
 
 ### Context Module
 
@@ -255,10 +322,10 @@ Current site actions and adapters:
 
 - print current account information through the selected runtime adapter
 - collect search cards through the selected search adapter
+- inspect login and verification state through the selected runtime adapter
 
 Future site actions:
 
-- search
 - feed
 - user
 - note
@@ -298,6 +365,7 @@ Purpose:
 
 - isolate all site-specific behavior behind explicit contracts
 - provide runtime account detection and search extraction for each supported site
+- provide site-specific login and verification-state indicators when available
 
 Input:
 
@@ -310,6 +378,7 @@ Output:
 - current account result
 - raw search result items
 - parsed visible publish dates
+- session inspection result
 
 Dependencies:
 
@@ -321,8 +390,66 @@ Rules:
 
 - no site adapter imports another site adapter
 - selectors, URLs, visible UI labels, and site-specific time parsing stay here
+- login, logout, captcha, verification, and rate-limit text indicators stay here
 - adding a site means adding `src/sites/<site>/` and registering it in
   `src/sites/site-registry.ts`
+
+### Background Browser Service
+
+Purpose:
+
+- own the long-lived browser and page session used by the API server
+- run one search task at a time on the shared page
+- keep the browser open until process shutdown
+- run scheduled session inspection when no task is active
+
+Input:
+
+- validated runtime configuration
+- task options from the API layer
+- selected runtime and search adapters
+
+Output:
+
+- service status
+- active and last task snapshots
+- session inspection state
+- search task results
+
+Rules:
+
+- the service starts the browser once during process startup
+- API search tasks reuse the existing page session
+- no second search starts while a search or session monitor is using the page
+- scheduled monitoring skips while a task is running
+- service shutdown closes the persistent context so profile state is flushed
+
+### Session Monitor
+
+Purpose:
+
+- detect whether the visible browser session appears usable
+- expose logged-in, logged-out, verification-required, browser-closed, and error
+  states
+
+Input:
+
+- page session
+- selected runtime site adapter
+- visible page URL, title, and body text
+- current account action result when safe to query
+
+Output:
+
+- `SessionInspectionResult`
+- structured indicators with severity and message
+
+Rules:
+
+- monitoring detects and reports state only
+- monitoring must not solve captcha, automate login, or bypass verification
+- indicators must be explainable and site-specific
+- scheduled monitoring must not run concurrently with search tasks
 
 ### Transform Module
 
@@ -440,13 +567,16 @@ Current phase:
 Environment variables
         |
         v
-Validated runtime configuration
+Validated runtime and API configuration
         |
         v
 Selected site adapter
         |
         v
-Persistent browser context
+Background browser service
+        |
+        v
+Visible persistent browser context
         |
         v
 Page session
@@ -461,13 +591,16 @@ Raw profile verification result
 Open start page result
         |
         v
-Current account result
+Session inspection result
+        |
+        v
+HTTP search request
         |
         v
 Search workflow result
         |
         v
-Structured log output
+JSON API response and structured logs
 ```
 
 Future collection flow:
@@ -514,16 +647,22 @@ Select site adapter
 Load profile
         |
         v
-Create browser context
+Create visible persistent browser context
         |
         v
-Execute action
+Start HTTP API server
         |
         v
-Report result
+Run scheduled session monitor while idle
         |
         v
-Keep alive or shutdown
+Execute one API task at a time
+        |
+        v
+Report task result, busy state, or account-attention state
+        |
+        v
+Shutdown service
 ```
 
 Browser lifecycle:
@@ -532,10 +671,10 @@ Browser lifecycle:
 Create persistent context
         |
         v
-Reuse context for actions
+Reuse context for API tasks and idle monitoring
         |
         v
-Close context
+Close context on process shutdown
 ```
 
 Action lifecycle:
@@ -608,6 +747,13 @@ Strategy:
     `bundled` channel only for Playwright-managed Chromium profiles.
 12. Keep `src/core/` free of site names, URLs, selectors, UI text, and
     site-specific configuration names.
+13. Run the browser visibly by default. Manual login and account checks happen
+    in the same persistent profile visible through noVNC in Docker.
+14. Keep API task concurrency at one active search per browser profile. A
+    second search request returns `409 task_busy` instead of queueing.
+15. Treat logout, captcha, verification, and risk-control prompts as
+    account-attention states. The system reports them and waits for manual
+    intervention; it does not bypass them.
 
 ## Current Phase Acceptance Criteria
 
@@ -617,12 +763,16 @@ Strategy:
 - configured start URL can be opened
 - current profile information can be printed
 - keyword search can run through the registered Xiaohongshu search adapter
-- browser can remain open for manual inspection
+- API service can keep the browser open across requests
+- concurrent search requests return busy status
+- session monitor can report logged-out or verification-required states
+- Docker noVNC deployment can preserve Chrome user data across restarts
 - failure modes are reported with structured logs
 
 ## Out of Scope For Current Phase
 
 - account login flow
+- captcha solving, risk-control bypass, fingerprint spoofing, or stealth patches
 - data storage
 - proxy management
 - distributed runtime

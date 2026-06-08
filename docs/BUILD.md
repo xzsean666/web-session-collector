@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Step 4 MVP implementation is complete.
+Step 5 background browser API implementation is complete.
 
 This guide describes how to install, check, test, and run the current MVP.
 
@@ -28,6 +28,8 @@ Current state:
 - pnpm TypeScript project exists
 - MVP runtime implementation exists
 - configuration tests exist
+- local HTTP API service exists
+- Docker noVNC deployment exists
 
 ## Installation
 
@@ -60,7 +62,7 @@ APP_USER_DATA_DIR=/home/sean/.cache/web-session-collector/chrome-user-data
 APP_PROFILE_NAME=isolated-automation
 APP_BROWSER_MODE=launch
 APP_CDP_URL=
-APP_HEADLESS=true
+APP_HEADLESS=false
 APP_BROWSER_CHANNEL=chrome
 APP_EXECUTABLE_PATH=/opt/google/chrome/google-chrome
 APP_PROFILE_DIRECTORY=Default
@@ -75,6 +77,11 @@ APP_KEEP_BROWSER_ALIVE=false
 APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true
 APP_BROWSER_FLAGS='["--no-first-run","--no-default-browser-check"]'
 APP_IGNORE_DEFAULT_ARGS='[]'
+APP_API_HOST=0.0.0.0
+APP_API_PORT=10085
+APP_API_REQUEST_BODY_LIMIT_BYTES=1048576
+APP_ACCOUNT_CHECK_INTERVAL_MS=60000
+NOVNC_PORT=10086
 APP_TASK=search
 APP_SEARCH_RECENT_DAYS=30
 APP_SEARCH_LIMIT=10
@@ -105,6 +112,11 @@ Defaults:
 | `APP_LOG_LEVEL` | `info` |
 | `APP_KEEP_BROWSER_ALIVE` | `false` |
 | `APP_INTERACTIVE_LOGIN_ON_MISSING_USER` | `false` |
+| `APP_API_HOST` | `0.0.0.0` |
+| `APP_API_PORT` | `10085` |
+| `APP_API_REQUEST_BODY_LIMIT_BYTES` | `1048576` |
+| `APP_ACCOUNT_CHECK_INTERVAL_MS` | `60000` |
+| `NOVNC_PORT` | `10086` |
 | `APP_TASK` | `search` |
 | `APP_SEARCH_RECENT_DAYS` | `30` |
 | `APP_SEARCH_LIMIT` | `10` |
@@ -138,15 +150,14 @@ Notes:
   argument by the browser module.
 - `APP_LOCALE`, `APP_TIMEZONE_ID`, `APP_VIEWPORT_WIDTH`,
   `APP_VIEWPORT_HEIGHT`, and `APP_DEVICE_SCALE_FACTOR` define a consistent
-  desktop browser environment for both headed login and headless runs.
-- `APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true` only works in
-  `APP_BROWSER_MODE=launch`. When a headless run cannot find the current user,
-  the framework closes headless Chrome, opens a visible login window, waits for
-  Enter or browser close, then restarts headless with the same isolated profile.
+  desktop browser environment for manual login, API runs, and Docker noVNC.
+- `APP_HEADLESS=false` is the recommended default. API mode keeps the visible
+  browser open until the service exits.
+- `APP_ACCOUNT_CHECK_INTERVAL_MS` controls the idle session monitor. Set it to
+  `0` to disable scheduled checks and use `POST /api/session/check` manually.
 - `APP_IGNORE_DEFAULT_ARGS` removes selected Playwright default launch
-  arguments. For a real Chrome profile, removing `--password-store=basic`,
-  `--use-mock-keychain`, and `--disable-sync` is closer to normal Chrome
-  profile behavior.
+  arguments. Leave it as `[]` unless a specific Playwright launch issue has
+  been diagnosed.
 - `APP_START_URL` must be an `http` or `https` URL. It is opened after Profile
   verification so the run can confirm the logged-in browser state reaches the
   target site.
@@ -157,6 +168,8 @@ Notes:
   They do not affect the MVP runtime.
 - `APP_SEARCH_SITE` selects the site adapter used by `pnpm run collect`.
 - Environment configuration uses `APP_*` names only.
+- API mode uses the same `APP_SEARCH_RECENT_DAYS`, `APP_SEARCH_LIMIT`, and
+  `APP_SEARCH_SCROLLS` values as defaults for search requests.
 
 ## Run Commands
 
@@ -164,10 +177,12 @@ Available commands:
 
 ```text
 pnpm run dev
+pnpm run api
 pnpm run collect
 pnpm run collect:xiaohongshu
 pnpm run build
 pnpm run start
+pnpm run start:api
 pnpm run check
 pnpm run test
 ```
@@ -175,12 +190,14 @@ pnpm run test
 Meanings:
 
 - `pnpm run dev`: run the framework in development mode
+- `pnpm run api`: run the background browser API in development mode
 - `pnpm run collect`: run a selected collection task through a selected site
   adapter; the current implemented task is `search`
 - `pnpm run collect:xiaohongshu`: run collection with the Xiaohongshu site
   adapter selected explicitly
 - `pnpm run build`: compile TypeScript into `dist/`
 - `pnpm run start`: run the compiled framework
+- `pnpm run start:api`: run the compiled background browser API
 - `pnpm run check`: run TypeScript type checking without emit
 - `pnpm run test`: compile and run Node built-in tests
 
@@ -193,6 +210,97 @@ source .env
 set +a
 pnpm run dev
 ```
+
+Background API example:
+
+```text
+cp .env.example .env
+mkdir -p /home/sean/.cache/web-session-collector/chrome-user-data
+set -a
+source .env
+set +a
+pnpm run api
+```
+
+The API process launches one visible persistent Chrome context and keeps it
+open until the process exits.
+
+API endpoints:
+
+```text
+GET  /health
+GET  /api/status
+GET  /api/sites/search
+POST /api/session/check
+POST /api/xiaohongshu/search
+```
+
+Search request:
+
+```text
+curl -s http://127.0.0.1:10085/api/xiaohongshu/search \
+  -H 'content-type: application/json' \
+  -d '{"keyword":"咖啡","recentDays":30,"limit":5,"scrollCount":2}'
+```
+
+Multi-keyword request:
+
+```text
+curl -s http://127.0.0.1:10085/api/xiaohongshu/search \
+  -H 'content-type: application/json' \
+  -d '{"keywords":["咖啡","成都"],"recentDays":14,"limitPerKeyword":5}'
+```
+
+Concurrent behavior:
+
+- one search request runs synchronously and returns the result when complete
+- a second search request while the first is still running returns
+  `409 task_busy` with the running task snapshot
+- if the session monitor reports `logged_out`, search returns
+  `428 login_required`
+- if the session monitor reports `challenge_required`, search returns
+  `423 verification_required`
+- use `GET /api/status` to inspect browser, page, task, and session state
+- use `POST /api/session/check` after manual login to refresh session state
+
+Docker noVNC deployment:
+
+```text
+docker compose up --build
+```
+
+Open noVNC:
+
+```text
+http://127.0.0.1:10086/vnc.html
+```
+
+Default noVNC access:
+
+```text
+No password is required.
+```
+
+Set a password before starting:
+
+```text
+VNC_PASSWORD='replace-this' docker compose up --build
+```
+
+Docker API:
+
+```text
+curl -s http://127.0.0.1:10085/api/status
+```
+
+Docker persistence:
+
+- compose stores Chrome user data in the named volume `chrome-user-data`
+- inside the container the persistent profile path is `/data/chrome-user-data`
+- manual Xiaohongshu login through noVNC survives container restarts as long as
+  the volume is not removed
+- `docker compose down` keeps the volume
+- `docker compose down -v` removes the login/profile data
 
 Keyword search examples:
 
@@ -233,7 +341,7 @@ APP_SITE=xiaohongshu \
 APP_USER_DATA_DIR=/home/sean/.cache/web-session-collector/chrome-user-data \
 APP_PROFILE_NAME=isolated-automation \
 APP_BROWSER_MODE=launch \
-APP_HEADLESS=true \
+APP_HEADLESS=false \
 APP_EXECUTABLE_PATH=/opt/google/chrome/google-chrome \
 APP_PROFILE_DIRECTORY=Default \
 APP_LOCALE=zh-CN \
@@ -243,11 +351,13 @@ APP_VIEWPORT_HEIGHT=768 \
 APP_DEVICE_SCALE_FACTOR=1 \
 APP_START_URL=https://www.xiaohongshu.com/ \
 APP_KEEP_BROWSER_ALIVE=false \
-APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true \
+APP_INTERACTIVE_LOGIN_ON_MISSING_USER=false \
 APP_BROWSER_FLAGS='["--no-first-run","--no-default-browser-check"]' \
 APP_IGNORE_DEFAULT_ARGS='[]' \
-APP_TASK=search \
-pnpm run dev
+APP_API_HOST=0.0.0.0 \
+APP_API_PORT=10085 \
+APP_ACCOUNT_CHECK_INTERVAL_MS=60000 \
+pnpm run api
 ```
 
 Advanced example using the user's original `Profile 7` through `connect` mode:
@@ -277,8 +387,10 @@ User responsibilities:
 
 - log in to Xiaohongshu inside the isolated automation profile if the run needs
   authenticated user information
-- when the interactive login window opens, finish login and then press Enter in
-  the terminal or close the browser window
+- in API mode, use the visible browser window or Docker noVNC page to complete
+  login manually
+- after manual login, call `POST /api/session/check` or wait for the scheduled
+  session monitor to refresh account state
 - start Chrome with the intended profile and remote debugging port when using
   `connect` mode
 - open a dedicated Xiaohongshu tab in the intended profile before running the
@@ -295,6 +407,9 @@ Framework responsibilities:
 - reuse an existing Xiaohongshu page in `connect` mode instead of creating a
   new page
 - verify that a page can be used
+- keep the browser open in API mode until process shutdown
+- report logged-out and verification-required states without attempting to
+  bypass them
 - print profile metadata without exposing sensitive session data
 
 ## Expected Phase 1 Verification

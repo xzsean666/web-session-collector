@@ -2,7 +2,7 @@
 
 ## Current Step
 
-Step 4: MVP Implementation and decoupling are complete.
+Step 5: Background browser API service is implemented.
 
 ## Current Progress
 
@@ -19,10 +19,19 @@ Completed:
   account
 - keyword search CLI with multi-keyword input, date filtering, limits, scrolls,
   headed debug mode, and JSON output
+- shared search task module used by both CLI and API
+- background API service that keeps one visible persistent browser open
+- single-flight Xiaohongshu search API with `409 task_busy`
+- session monitor for logged-out, verification-required, browser-closed, and
+  error states
+- Dockerfile and compose deployment with Xvfb, x11vnc, noVNC, and persistent
+  Chrome user data volume
 
 Not implemented by design:
 
-- direct Xiaohongshu API integration
+- official/direct Xiaohongshu API integration
+- captcha solving, verification bypass, fingerprint spoofing, or stealth
+  patches
 - storage adapters
 - proxy support
 - queue or scheduler
@@ -33,10 +42,6 @@ Not implemented by design:
 Latest known successful validation before this handoff:
 
 - `pnpm run check`
-- `pnpm run test`
-- `pnpm run collect:xiaohongshu -- 咖啡 --days=30 --limit=2 --scrolls=1`
-- `pnpm run dev` with the isolated automation profile
-- current account was found in the isolated profile
 
 ## Architecture Summary
 
@@ -52,6 +57,11 @@ Core boundary:
 - `src/core/search/`: generic search workflow and contracts
 - `src/core/monitoring/`: structured logging
 - `src/core/types/`: reusable contracts
+- `src/runtime/search-task.ts`: shared search task execution and result
+  filtering
+- `src/runtime/background-browser-service.ts`: long-lived browser service for
+  API mode
+- `src/api/`: API config and HTTP server
 
 Project and site boundary:
 
@@ -62,6 +72,8 @@ Project and site boundary:
 - `src/sites/xiaohongshu/`: Xiaohongshu URLs, selectors, account detection,
   notices, and visible date parsing
 - `src/scripts/collect.ts`: CLI entry point for generic search workflow
+- `Dockerfile`, `docker-compose.yml`, `docker/entrypoint.sh`: Docker noVNC API
+  deployment
 
 Rule to preserve:
 
@@ -110,10 +122,14 @@ APP_SITE=xiaohongshu
 APP_USER_DATA_DIR=/home/sean/.cache/web-session-collector/chrome-user-data
 APP_PROFILE_NAME=isolated-automation
 APP_BROWSER_MODE=launch
-APP_HEADLESS=true
+APP_HEADLESS=false
 APP_EXECUTABLE_PATH=/opt/google/chrome/google-chrome
 APP_PROFILE_DIRECTORY=Default
-APP_INTERACTIVE_LOGIN_ON_MISSING_USER=true
+APP_INTERACTIVE_LOGIN_ON_MISSING_USER=false
+APP_API_HOST=0.0.0.0
+APP_API_PORT=10085
+NOVNC_PORT=10086
+APP_ACCOUNT_CHECK_INTERVAL_MS=60000
 APP_TASK=search
 APP_SEARCH_SITE=xiaohongshu
 ```
@@ -126,15 +142,17 @@ Immediate validation for the next session:
 
 1. Run `pnpm run check`.
 2. Run `pnpm run test`.
-3. Run `pnpm run collect:xiaohongshu -- 咖啡 --days=30 --limit=2 --scrolls=1`.
-4. Optionally run `pnpm run dev` if browser validation is needed.
-5. Confirm no automation Chrome process remains after validation.
+3. Optionally run `pnpm run api` with a prepared visible Chrome environment.
+4. Call `GET /api/status`.
+5. Call `POST /api/xiaohongshu/search`.
+6. Optionally run `docker compose up --build` and open
+   `http://127.0.0.1:10086/vnc.html`.
 
 Next feature candidates:
 
 1. Harden Xiaohongshu selectors if the UI changes.
 2. Add another site adapter to prove the generic core boundary.
-3. Add action input schemas.
+3. Add API auth if the service is exposed beyond localhost.
 4. Add transform contracts.
 5. Add storage only after a concrete output target is approved.
 
@@ -150,6 +168,10 @@ Chrome profile handling:
   another Chrome profile
 - Chrome remote debugging behavior changed in Chrome 136, so automation should
   use a separate non-standard user data directory when possible
+- API mode owns one visible browser and one active page; search and monitoring
+  do not run concurrently on that page
+- Docker compose persists Chrome user data in a named volume; do not run another
+  Chrome process against that same profile directory
 
 Site behavior:
 
@@ -157,6 +179,8 @@ Site behavior:
 - browser automation can break when site selectors, notices, or visible date
   formats change
 - this design cannot guarantee avoidance of platform risk controls
+- session monitoring detects login and verification states but does not bypass
+  them
 
 Repository rules:
 

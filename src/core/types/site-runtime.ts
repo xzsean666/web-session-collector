@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { PageSession } from "../context/page-session.js";
 import type { CurrentAccountResult } from "./current-account.js";
+import type { SessionInspectionResult } from "./session-monitor.js";
 
 export interface RuntimeSiteAdapter {
   readonly siteKey: string;
@@ -11,4 +12,8 @@ export interface RuntimeSiteAdapter {
     pageSession: PageSession,
     logger: Logger
   ): Promise<CurrentAccountResult>;
+  inspectSession?(
+    pageSession: PageSession,
+    logger: Logger
+  ): Promise<SessionInspectionResult>;
 }

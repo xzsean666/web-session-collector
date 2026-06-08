@@ -1,25 +1,15 @@
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
-import {
-  closeBrowserSession,
-  createBrowserSession,
-  type BrowserSession
-} from "../core/browser/browser-session.js";
 import { loadLocalEnvFile } from "../core/config/local-env-file.js";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
-import {
-  closePageSession,
-  createPageSession,
-  type PageSession
-} from "../core/context/page-session.js";
-import type {
-  SearchItem,
-  SearchResult
-} from "../core/search/search-types.js";
-import { runSearchWorkflow } from "../core/search/search-workflow.js";
+import type { SearchItem } from "../core/search/search-types.js";
 import { createLogger, serializeError } from "../core/monitoring/logger.js";
 import type { LogLevel } from "../core/types/runtime.js";
-import { getSearchSiteAdapter, listSearchSiteKeys } from "../sites/site-registry.js";
+import {
+  runSearchTaskWithNewBrowser,
+  type SearchKeywordResult
+} from "../runtime/search-task.js";
+import { listSearchSiteKeys } from "../sites/site-registry.js";
 
 type CollectTaskName = "search";
 
@@ -35,17 +25,7 @@ interface CollectCliOptions {
   readonly help: boolean;
 }
 
-interface PrintableKeywordResult {
-  readonly siteKey: string;
-  readonly keyword: string;
-  readonly searchUrl: string;
-  readonly collectedCount: number;
-  readonly normalizedCount: number;
-  readonly inRangeCount: number;
-  readonly unknownDateCount: number;
-  readonly matchedItems: readonly SearchItem[];
-  readonly usedFallback: boolean;
-}
+type PrintableKeywordResult = SearchKeywordResult;
 
 async function main(): Promise<void> {
   loadLocalEnvFile();
@@ -65,7 +45,6 @@ async function main(): Promise<void> {
     throw new Error("At least one keyword is required.");
   }
 
-  const siteAdapter = getSearchSiteAdapter(cliOptions.siteKey);
   const runtimeConfig = loadRuntimeConfig({
     ...process.env,
     APP_HEADLESS: cliOptions.headed ? "false" : process.env.APP_HEADLESS
@@ -73,63 +52,25 @@ async function main(): Promise<void> {
   const logger = createLogger({
     level: parseSearchLogLevel(process.env.APP_SEARCH_LOG_LEVEL)
   });
-  let browserSession: BrowserSession | undefined;
-  let pageSession: PageSession | undefined;
 
-  try {
-    browserSession = await createBrowserSession(
-      runtimeConfig.profile,
-      runtimeConfig.browser,
-      logger
-    );
-    pageSession = await createPageSession(
-      browserSession.browserContext,
-      logger,
-      {
-        allowNewPage: runtimeConfig.browser.connectionMode !== "connect",
-        preferNewPage: false,
-        requiredExistingPageHostSuffix:
-          runtimeConfig.browser.connectionMode === "connect"
-            ? siteAdapter.targetHostSuffix
-            : undefined
-      }
-    );
+  const searchTaskResult = await runSearchTaskWithNewBrowser(
+    runtimeConfig,
+    {
+      siteKey: cliOptions.siteKey,
+      keywords: cliOptions.keywords,
+      recentDays: cliOptions.recentDays,
+      limitPerKeyword: cliOptions.limitPerKeyword,
+      scrollCount: cliOptions.scrollCount
+    },
+    logger
+  );
 
-    const results: SearchResult[] = [];
-
-    for (const keyword of cliOptions.keywords) {
-      results.push(
-        await runSearchWorkflow(
-          pageSession,
-          siteAdapter,
-          {
-            keyword,
-            scrollCount: cliOptions.scrollCount
-          },
-          logger
-        )
-      );
-    }
-
-    const printableResults = results.map((result) =>
-      buildPrintableKeywordResult(result, cliOptions)
-    );
-
-    if (cliOptions.json) {
-      console.log(JSON.stringify(printableResults, null, 2));
-      return;
-    }
-
-    printKeywordResults(printableResults, cliOptions);
-  } finally {
-    if (pageSession !== undefined) {
-      await closePageSession(pageSession, logger);
-    }
-
-    if (browserSession !== undefined) {
-      await closeBrowserSession(browserSession, logger);
-    }
+  if (cliOptions.json) {
+    console.log(JSON.stringify(searchTaskResult.results, null, 2));
+    return;
   }
+
+  printKeywordResults(searchTaskResult.results, cliOptions);
 }
 
 async function resolveCliOptions(
@@ -326,36 +267,6 @@ function dedupeKeywords(keywords: readonly string[]): readonly string[] {
   }
 
   return dedupedKeywords;
-}
-
-function buildPrintableKeywordResult(
-  result: SearchResult,
-  cliOptions: CollectCliOptions
-): PrintableKeywordResult {
-  const unknownDateCount = result.items.filter(
-    (item) => item.ageDays === undefined
-  ).length;
-  const filteredItems =
-    cliOptions.recentDays === 0
-      ? result.items
-      : result.items.filter(
-          (item) =>
-            item.ageDays !== undefined && item.ageDays <= cliOptions.recentDays
-        );
-  const matchedItems =
-    filteredItems.length > 0 ? filteredItems : result.items.slice(0, cliOptions.limitPerKeyword);
-
-  return {
-    siteKey: result.siteKey,
-    keyword: result.keyword,
-    searchUrl: result.searchUrl,
-    collectedCount: result.collectedCount,
-    normalizedCount: result.items.length,
-    inRangeCount: filteredItems.length,
-    unknownDateCount,
-    matchedItems: matchedItems.slice(0, cliOptions.limitPerKeyword),
-    usedFallback: filteredItems.length === 0 && result.items.length > 0
-  };
 }
 
 function printKeywordResults(

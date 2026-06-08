@@ -2,13 +2,13 @@
 
 ## Current Step
 
-Step 2: Documentation.
+Step 5: Background browser API service and Docker noVNC deployment.
 
 This file records official documentation addresses for external dependencies,
 runtime platforms, and integration targets. It exists so future AI sessions can
 quickly find current docs without guessing.
 
-Last checked: 2026-06-03.
+Last checked: 2026-06-08.
 
 ## Required Current-Phase Docs
 
@@ -16,6 +16,7 @@ Last checked: 2026-06-03.
 | --- | --- |
 | Node.js API | https://nodejs.org/api/ |
 | Node.js latest API redirect | https://nodejs.org/docs/latest/api/ |
+| Node.js HTTP API | https://nodejs.org/api/http.html |
 | Node.js process and environment variables | https://nodejs.org/api/process.html |
 | Node.js downloads and LTS versions | https://nodejs.org/en/download |
 | Playwright docs | https://playwright.dev/docs/intro |
@@ -32,6 +33,13 @@ Last checked: 2026-06-03.
 | Zod GitHub repository | https://github.com/colinhacks/zod |
 | Pino docs | https://getpino.io/ |
 | Chrome remote debugging policy | https://developer.chrome.com/blog/remote-debugging-port |
+| Dockerfile reference | https://docs.docker.com/reference/dockerfile/ |
+| Docker Compose docs | https://docs.docker.com/compose/ |
+| Docker volumes docs | https://docs.docker.com/engine/storage/volumes/ |
+| noVNC project | https://github.com/novnc/noVNC |
+| websockify project | https://github.com/novnc/websockify |
+| x11vnc project | https://github.com/LibVNC/x11vnc |
+| Xvfb manual | https://www.x.org/releases/X11R7.6/doc/man/man1/Xvfb.1.xhtml |
 
 ## Target Site
 
@@ -71,6 +79,15 @@ pnpm:
 
 - Use pnpm for all dependency and script commands.
 - Keep the repository workspace-compatible.
+
+Docker noVNC deployment:
+
+- Docker Compose is used only for local deployment in this phase.
+- API and noVNC ports should be bound to localhost unless an authentication and
+  network-access model is added.
+- Chrome user data must be stored in a persistent Docker volume.
+- noVNC is an operator access path for manual login and inspection, not an app
+  UI or login automation layer.
 
 ## Update Procedure
 
