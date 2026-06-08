@@ -219,6 +219,32 @@ send_slack() {
   fi
 }
 
+read_session_state_from_status() {
+  python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('session',{}).get('state','unknown'))" \
+    2>/dev/null || echo unknown
+}
+
+read_session_state_from_check() {
+  python3 -c "import sys,json; print(json.load(sys.stdin).get('session',{}).get('state','unknown'))" \
+    2>/dev/null || echo unknown
+}
+
+refresh_session_state() {
+  curl -fsS -m 30 -X POST "${BASE_URL}/api/session/check" 2>/dev/null \
+    | read_session_state_from_check
+}
+
+is_blocking_session_state() {
+  case "$1" in
+    logged_out|challenge_required|browser_closed|error)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 build_payload() {
   python3 - "$1" "${SEEN_FILE}" <<'PY'
 import json, os, sys
@@ -260,11 +286,21 @@ run_cycle() {
   # 2) 登录态检查
   local state
   state="$(curl -fsS -m 10 "${BASE_URL}/api/status" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('session',{}).get('state','unknown'))" 2>/dev/null || echo unknown)"
+    | read_session_state_from_status)"
+
   if [ "${state}" != "logged_in" ]; then
+    log "登录态缓存为 state=${state},主动刷新一次"
+    state="$(refresh_session_state)"
+  fi
+
+  if is_blocking_session_state "${state}"; then
     log "⚠️ 账号未登录(state=${state}),跳过本轮"
     send_slack "🟠 采集跳过:账号未登录 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
     return 1
+  fi
+
+  if [ "${state}" != "logged_in" ]; then
+    log "⚠️ 登录态无法确认(state=${state}),继续尝试搜索"
   fi
 
   # 3) 逐个关键词采集

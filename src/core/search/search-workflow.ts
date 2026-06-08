@@ -8,6 +8,9 @@ import type {
   SearchSiteAdapter
 } from "./search-types.js";
 
+const SEARCH_NAVIGATION_TIMEOUT_MS = 45_000;
+const SEARCH_NAVIGATION_MAX_ATTEMPTS = 2;
+
 export async function runSearchWorkflow(
   pageSession: PageSession,
   siteAdapter: SearchSiteAdapter,
@@ -28,10 +31,13 @@ export async function runSearchWorkflow(
     "Search workflow started."
   );
 
-  await pageSession.page.goto(searchUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 30_000
-  });
+  await navigateToSearchUrl(
+    pageSession,
+    searchUrl,
+    siteAdapter.siteKey,
+    input.keyword,
+    logger
+  );
   await siteAdapter.dismissKnownNotices(pageSession);
   await siteAdapter.waitForSearchResults(pageSession);
 
@@ -112,6 +118,92 @@ export async function runSearchWorkflow(
     searchUrl,
     collectedCount: rawItems.length,
     items
+  };
+}
+
+async function navigateToSearchUrl(
+  pageSession: PageSession,
+  searchUrl: string,
+  siteKey: string,
+  keyword: string,
+  logger: Logger
+): Promise<void> {
+  let lastError: unknown;
+
+  for (
+    let attempt = 1;
+    attempt <= SEARCH_NAVIGATION_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      await pageSession.page.goto(searchUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: SEARCH_NAVIGATION_TIMEOUT_MS
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+
+      if (isCurrentSearchPage(pageSession.page.url())) {
+        await pageSession.page.evaluate(() => window.stop()).catch(() => {});
+        logger.warn(
+          {
+            module: "core_search",
+            stage: "navigation_timeout_recovered",
+            siteKey,
+            keyword,
+            searchUrl,
+            currentUrl: pageSession.page.url(),
+            attempt,
+            error: serializeNavigationError(error)
+          },
+          "Search navigation timed out after reaching the search page; continuing."
+        );
+        return;
+      }
+
+      if (attempt < SEARCH_NAVIGATION_MAX_ATTEMPTS) {
+        logger.warn(
+          {
+            module: "core_search",
+            stage: "navigation_retry",
+            siteKey,
+            keyword,
+            searchUrl,
+            attempt,
+            error: serializeNavigationError(error)
+          },
+          "Search navigation failed; retrying."
+        );
+        await pageSession.page.waitForTimeout(1_000);
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError ?? "Search navigation failed."));
+}
+
+function isCurrentSearchPage(currentUrl: string): boolean {
+  try {
+    return new URL(currentUrl).pathname.includes("/search_result");
+  } catch {
+    return currentUrl.includes("/search_result");
+  }
+}
+
+function serializeNavigationError(error: unknown): Record<string, string> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message
+    };
+  }
+
+  return {
+    name: "Error",
+    message: String(error)
   };
 }
 
