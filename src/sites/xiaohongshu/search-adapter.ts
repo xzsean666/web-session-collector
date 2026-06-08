@@ -16,6 +16,7 @@ export const xiaohongshuSearchAdapter: SearchSiteAdapter = {
   dismissKnownNotices,
   extractSearchItems,
   parsePublishedAtText: parseXiaohongshuDate,
+  sortByLatest,
   fetchNoteDetail
 };
 
@@ -134,6 +135,61 @@ async function readSearchTokenMap(
     .catch(() => [] as [string, string][]);
 
   return new Map(entries);
+}
+
+// 把搜索结果切到「最新」排序:hover 顶部「筛选」打开面板,再点其中的「最新」。
+// 排序控件是悬停弹出的浮层,所以用鼠标坐标驱动(容器内浏览器是有头模式,可用)。
+async function sortByLatest(pageSession: PageSession): Promise<boolean> {
+  const page = pageSession.page;
+
+  try {
+    const filterBox = await page.evaluate(() => {
+      for (const element of Array.from(document.querySelectorAll("body *"))) {
+        if (
+          (element.textContent ?? "").trim() === "筛选" &&
+          element.querySelector("svg")
+        ) {
+          const rect = element.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          }
+        }
+      }
+      return null;
+    });
+
+    if (filterBox === null) {
+      return false;
+    }
+
+    await page.mouse.move(filterBox.x, filterBox.y);
+    await page.waitForTimeout(1_200);
+
+    const latestBox = await page.evaluate(() => {
+      const spans = Array.from(document.querySelectorAll("span")).filter(
+        (element) =>
+          (element.textContent ?? "").trim() === "最新" &&
+          element.getBoundingClientRect().width > 0
+      );
+      if (spans.length === 0) {
+        return null;
+      }
+      const rect = spans[0].getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    });
+
+    if (latestBox === null) {
+      return false;
+    }
+
+    await page.mouse.move(latestBox.x, latestBox.y);
+    await page.waitForTimeout(200);
+    await page.mouse.click(latestBox.x, latestBox.y);
+    await page.waitForTimeout(2_500);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function buildDetailUrl(itemId: string, xsecToken: string): string {

@@ -1,6 +1,9 @@
 export interface SearchInput {
   readonly keyword: string;
   readonly scrollCount: number;
+  // 用于"够了就停"的滚动早停:范围内笔记数达到 limitPerKeyword 就不再滚。
+  readonly recentDays: number;
+  readonly limitPerKeyword: number;
 }
 
 export interface RawSearchItem {
@@ -56,6 +59,10 @@ export interface SearchSiteAdapter {
   dismissKnownNotices(pageSession: import("../context/page-session.js").PageSession): Promise<void>;
   extractSearchItems(pageSession: import("../context/page-session.js").PageSession): Promise<readonly RawSearchItem[]>;
   parsePublishedAtText(publishedAtText: string, now: Date): Date | undefined;
+  // 把搜索结果切换为「最新」(按时间倒序)。返回是否成功;失败则调用方按未排序处理。
+  sortByLatest?(
+    pageSession: import("../context/page-session.js").PageSession
+  ): Promise<boolean>;
   // 打开笔记详情页提取正文/标签/图片;只有支持的站点实现。返回 undefined 表示无法获取(被重定向/验证码/无 token)。
   fetchNoteDetail?(
     pageSession: import("../context/page-session.js").PageSession,

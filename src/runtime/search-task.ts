@@ -112,7 +112,9 @@ export async function runSearchTaskOnPage(
       siteAdapter,
       {
         keyword,
-        scrollCount: options.scrollCount
+        scrollCount: options.scrollCount,
+        recentDays: options.recentDays,
+        limitPerKeyword: options.limitPerKeyword
       },
       logger
     );

@@ -33,7 +33,7 @@ services:
       APP_ACCOUNT_CHECK_INTERVAL_MS: "60000"
       APP_SEARCH_RECENT_DAYS: "30"
       APP_SEARCH_LIMIT: "30"
-      APP_SEARCH_SCROLLS: "5"
+      APP_SEARCH_SCROLLS: "8"
     volumes:
       - chrome-user-data:/data/chrome-user-data
     restart: unless-stopped
