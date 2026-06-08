@@ -259,7 +259,8 @@ export class BackgroundBrowserService {
       keywords: options.keywords,
       recentDays: options.recentDays,
       limitPerKeyword: options.limitPerKeyword,
-      scrollCount: options.scrollCount
+      scrollCount: options.scrollCount,
+      fetchContent: options.fetchContent
     });
     this.activeTask = task;
 

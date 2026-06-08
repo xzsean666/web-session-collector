@@ -99,7 +99,8 @@ function normalizeAndSortItems(
       ageDays: parsedDate === undefined ? undefined : calculateAgeDays(parsedDate, now),
       likeCountText: rawItem.likeCountText,
       itemId: rawItem.itemId,
-      url: rawItem.url
+      url: rawItem.url,
+      xsecToken: rawItem.xsecToken
     });
   }
 

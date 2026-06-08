@@ -11,7 +11,8 @@ import {
 } from "../core/context/page-session.js";
 import type {
   SearchItem,
-  SearchResult
+  SearchResult,
+  SearchSiteAdapter
 } from "../core/search/search-types.js";
 import { runSearchWorkflow } from "../core/search/search-workflow.js";
 import type { RuntimeConfig } from "../core/types/runtime.js";
@@ -23,7 +24,11 @@ export interface SearchTaskOptions {
   readonly recentDays: number;
   readonly limitPerKeyword: number;
   readonly scrollCount: number;
+  readonly fetchContent: boolean;
 }
+
+// 详情页富集之间的间隔,降低触发验证码的概率。
+const DETAIL_FETCH_DELAY_MS = 1_000;
 
 export interface SearchKeywordResult {
   readonly siteKey: string;
@@ -96,20 +101,32 @@ export async function runSearchTaskOnPage(
   }
 
   const siteAdapter = getSearchSiteAdapter(options.siteKey);
-  const results: SearchResult[] = [];
+  const results: SearchKeywordResult[] = [];
 
   for (const keyword of options.keywords) {
-    results.push(
-      await runSearchWorkflow(
+    const searchResult = await runSearchWorkflow(
+      pageSession,
+      siteAdapter,
+      {
+        keyword,
+        scrollCount: options.scrollCount
+      },
+      logger
+    );
+
+    let keywordResult = buildSearchKeywordResult(searchResult, options);
+
+    // 紧跟该关键词的搜索做详情富集,xsec_token 仍新鲜;只对最终入选项开详情页。
+    if (options.fetchContent && siteAdapter.fetchNoteDetail !== undefined) {
+      keywordResult = await enrichKeywordResult(
         pageSession,
         siteAdapter,
-        {
-          keyword,
-          scrollCount: options.scrollCount
-        },
+        keywordResult,
         logger
-      )
-    );
+      );
+    }
+
+    results.push(keywordResult);
   }
 
   return {
@@ -118,7 +135,79 @@ export async function runSearchTaskOnPage(
     recentDays: options.recentDays,
     limitPerKeyword: options.limitPerKeyword,
     scrollCount: options.scrollCount,
-    results: results.map((result) => buildSearchKeywordResult(result, options))
+    results
+  };
+}
+
+async function enrichKeywordResult(
+  pageSession: PageSession,
+  siteAdapter: SearchSiteAdapter,
+  keywordResult: SearchKeywordResult,
+  logger: Logger
+): Promise<SearchKeywordResult> {
+  const fetchNoteDetail = siteAdapter.fetchNoteDetail;
+
+  if (fetchNoteDetail === undefined) {
+    return keywordResult;
+  }
+
+  const enrichedItems: SearchItem[] = [];
+  let enrichedCount = 0;
+
+  for (let index = 0; index < keywordResult.matchedItems.length; index += 1) {
+    const item = keywordResult.matchedItems[index];
+
+    if (index > 0) {
+      await new Promise((resolve) => setTimeout(resolve, DETAIL_FETCH_DELAY_MS));
+    }
+
+    let detail;
+    try {
+      detail = await fetchNoteDetail(pageSession, item);
+    } catch {
+      detail = undefined;
+    }
+
+    if (detail === undefined) {
+      logger.warn(
+        {
+          module: "core_search",
+          stage: "enrich_skipped",
+          siteKey: keywordResult.siteKey,
+          keyword: keywordResult.keyword,
+          itemId: item.itemId
+        },
+        "Note detail unavailable; keeping item without content."
+      );
+      enrichedItems.push(item);
+      continue;
+    }
+
+    enrichedItems.push({
+      ...item,
+      content: detail.content,
+      tags: detail.tags,
+      images: detail.images,
+      commentCountText: detail.commentCountText
+    });
+    enrichedCount += 1;
+  }
+
+  logger.info(
+    {
+      module: "core_search",
+      stage: "enriched",
+      siteKey: keywordResult.siteKey,
+      keyword: keywordResult.keyword,
+      matchedCount: keywordResult.matchedItems.length,
+      enrichedCount
+    },
+    "Note detail enrichment completed."
+  );
+
+  return {
+    ...keywordResult,
+    matchedItems: enrichedItems
   };
 }
 

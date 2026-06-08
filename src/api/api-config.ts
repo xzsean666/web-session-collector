@@ -5,6 +5,7 @@ export interface ApiSearchDefaults {
   readonly recentDays: number;
   readonly limitPerKeyword: number;
   readonly scrollCount: number;
+  readonly fetchContent: boolean;
 }
 
 export interface ApiConfig {
@@ -22,7 +23,8 @@ const apiEnvironmentSchema = z.object({
   APP_ACCOUNT_CHECK_INTERVAL_MS: z.string().optional(),
   APP_SEARCH_RECENT_DAYS: z.string().optional(),
   APP_SEARCH_LIMIT: z.string().optional(),
-  APP_SEARCH_SCROLLS: z.string().optional()
+  APP_SEARCH_SCROLLS: z.string().optional(),
+  APP_SEARCH_FETCH_CONTENT: z.string().optional()
 });
 
 export function loadApiConfig(
@@ -84,9 +86,38 @@ export function loadApiConfig(
         0,
         20,
         "APP_SEARCH_SCROLLS"
+      ),
+      fetchContent: parseBoolean(
+        parsedEnvironment.data.APP_SEARCH_FETCH_CONTENT,
+        false,
+        "APP_SEARCH_FETCH_CONTENT"
       )
     }
   };
+}
+
+function parseBoolean(
+  value: string | undefined,
+  defaultValue: boolean,
+  variableName: string
+): boolean {
+  if (value === undefined || value.trim() === "") {
+    return defaultValue;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (["true", "1", "yes", "y"].includes(normalizedValue)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "n"].includes(normalizedValue)) {
+    return false;
+  }
+
+  throw new ConfigurationError(`${variableName} must be a boolean value.`, [
+    `Received: ${value}`
+  ]);
 }
 
 function parseHost(value: string | undefined): string {

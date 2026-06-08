@@ -20,6 +20,7 @@ interface CollectCliOptions {
   readonly recentDays: number;
   readonly limitPerKeyword: number;
   readonly scrollCount: number;
+  readonly fetchContent: boolean;
   readonly json: boolean;
   readonly headed: boolean;
   readonly help: boolean;
@@ -60,7 +61,8 @@ async function main(): Promise<void> {
       keywords: cliOptions.keywords,
       recentDays: cliOptions.recentDays,
       limitPerKeyword: cliOptions.limitPerKeyword,
-      scrollCount: cliOptions.scrollCount
+      scrollCount: cliOptions.scrollCount,
+      fetchContent: cliOptions.fetchContent
     },
     logger
   );
@@ -109,6 +111,10 @@ function parseCliOptions(rawArguments: readonly string[]): CollectCliOptions {
     process.env.APP_SEARCH_SCROLLS,
     2
   );
+  let fetchContent = parseBooleanOption(
+    process.env.APP_SEARCH_FETCH_CONTENT,
+    false
+  );
   let json = false;
   let headed = false;
   let help = false;
@@ -132,6 +138,16 @@ function parseCliOptions(rawArguments: readonly string[]): CollectCliOptions {
 
     if (argument === "--headed") {
       headed = true;
+      continue;
+    }
+
+    if (argument === "--content") {
+      fetchContent = true;
+      continue;
+    }
+
+    if (argument === "--no-content") {
+      fetchContent = false;
       continue;
     }
 
@@ -209,6 +225,7 @@ function parseCliOptions(rawArguments: readonly string[]): CollectCliOptions {
     recentDays,
     limitPerKeyword,
     scrollCount,
+    fetchContent,
     json,
     headed,
     help
@@ -358,6 +375,27 @@ function parseNumberOption(
   return parseRequiredNumberOption(value, "environment option");
 }
 
+function parseBooleanOption(
+  value: string | undefined,
+  defaultValue: boolean
+): boolean {
+  if (value === undefined || value.trim() === "") {
+    return defaultValue;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (["true", "1", "yes", "y"].includes(normalizedValue)) {
+    return true;
+  }
+
+  if (["false", "0", "no", "n"].includes(normalizedValue)) {
+    return false;
+  }
+
+  return defaultValue;
+}
+
 function parseRequiredNumberOption(
   value: string | undefined,
   optionName: string
@@ -421,6 +459,7 @@ Options:
   --days <number>      只显示最近 N 天；0 表示不过滤日期，默认 30
   --limit <number>     每个关键词最多输出 N 条，默认 10
   --scrolls <number>   每个关键词搜索页向下滚动次数，默认 2
+  --content            额外打开每条笔记详情页抓取正文/标签/图片（较慢，默认关闭）
   --headed             可见浏览器调试运行，覆盖 APP_HEADLESS=false
   --json               输出 JSON
   --help               显示帮助

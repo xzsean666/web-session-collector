@@ -19,7 +19,8 @@ const searchRequestSchema = z
     recentDays: z.coerce.number().int().min(0).max(3650).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
     limitPerKeyword: z.coerce.number().int().min(1).max(100).optional(),
-    scrollCount: z.coerce.number().int().min(0).max(20).optional()
+    scrollCount: z.coerce.number().int().min(0).max(20).optional(),
+    fetchContent: z.boolean().optional()
   })
   .strict();
 
@@ -249,7 +250,10 @@ async function handleXiaohongshuSearch(
       context.apiConfig.searchDefaults.limitPerKeyword,
     scrollCount:
       parsedBody.data.scrollCount ??
-      context.apiConfig.searchDefaults.scrollCount
+      context.apiConfig.searchDefaults.scrollCount,
+    fetchContent:
+      parsedBody.data.fetchContent ??
+      context.apiConfig.searchDefaults.fetchContent
   });
 
   if (!dispatchResult.accepted) {
