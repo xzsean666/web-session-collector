@@ -1,9 +1,11 @@
 # API 调用案例
 
 `web-session-collector`(小红书)对外暴露一个 HTTP API。下面是各端点的调用示例。
+完整 API 文档见:[`docs/API_USAGE.md`](../docs/API_USAGE.md)
 
 - **基础地址**:`http://100.90.168.1:10085`(Tailscale 内网)
-- **远程桌面(人工登录/过验证码)**:`http://100.90.168.1:10086/vnc.html`
+- **active noVNC(API session 观察)**:`http://100.90.168.1:10086/vnc.html`
+- **idle noVNC(人工登录/过验证码)**:`http://100.90.168.1:10087/vnc.html`
 
 一键示例脚本:[`call-search-api.sh`](./call-search-api.sh)
 
@@ -42,8 +44,8 @@ curl http://100.90.168.1:10085/api/status
 
 关注 `status.session.state`:
 - `logged_in` —— 已登录,可以搜索
-- `challenge_required` —— 有验证码,需打开 noVNC 人工处理
-- `logged_out` —— 未登录,需打开 noVNC 登录
+- `challenge_required` —— 有验证码,需打开 idle noVNC 人工处理
+- `logged_out` —— 未登录,需打开 idle noVNC 登录
 
 ## 3. 主动检查登录态
 

@@ -14,7 +14,7 @@
 #
 # 可配置环境变量:
 #   BASE_URL          API 地址            (默认 http://100.90.168.1:10085)
-#   NOVNC_URL         noVNC 地址(提醒用) (默认 http://100.90.168.1:10086/vnc.html)
+#   IDLE_NOVNC_URL   idle noVNC 地址(提醒用) (默认 http://100.90.168.1:10087/vnc.html)
 #   SLACK_WEBHOOK_URL Slack Incoming Webhook;未设置则跳过通知
 #   DATA_DIR          数据目录            (默认 <仓库>/data)
 #   KEYWORDS_FILE     关键词文件          (默认 <脚本目录>/keywords.txt)
@@ -40,7 +40,7 @@ if [ -f "${ENV_FILE}" ]; then
 fi
 
 BASE_URL="${BASE_URL:-http://100.90.168.1:10085}"
-NOVNC_URL="${NOVNC_URL:-http://100.90.168.1:10086/vnc.html}"
+IDLE_NOVNC_URL="${IDLE_NOVNC_URL:-http://100.90.168.1:10087/vnc.html}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
 KEYWORDS_FILE="${KEYWORDS_FILE:-${SCRIPT_DIR}/keywords.txt}"
@@ -263,7 +263,7 @@ run_cycle() {
     | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('session',{}).get('state','unknown'))" 2>/dev/null || echo unknown)"
   if [ "${state}" != "logged_in" ]; then
     log "⚠️ 账号未登录(state=${state}),跳过本轮"
-    send_slack "🟠 采集跳过:账号未登录 (state=${state})。请打开 noVNC 登录:${NOVNC_URL}"
+    send_slack "🟠 采集跳过:账号未登录 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
     return 1
   fi
 

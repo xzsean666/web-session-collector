@@ -32,14 +32,14 @@ echo
 # ---------------------------------------------------------------------------
 # 2) 状态检查 —— 确认浏览器已就绪且账号处于登录态
 #    session.state 应为 "logged_in";若是 "challenge_required" / "logged_out",
-#    需要先通过 noVNC(http://<host>:10086/vnc.html)人工登录/过验证码。
+#    需要先通过 idle noVNC(http://<host>:10087/vnc.html)人工登录/过验证码。
 # ---------------------------------------------------------------------------
 echo "==> GET ${BASE_URL}/api/status"
 state="$(curl -fsS -m 10 "${BASE_URL}/api/status" \
   | python3 -c "import sys,json;print(json.load(sys.stdin).get('status',{}).get('session',{}).get('state','unknown'))")"
 echo "session.state = ${state}"
 if [[ "${state}" != "logged_in" ]]; then
-  echo "⚠️  账号未登录(${state})。请先打开 noVNC 人工登录后再搜索。" >&2
+  echo "⚠️  账号未登录(${state})。请先打开 idle noVNC 人工登录后再搜索。" >&2
   exit 2
 fi
 echo

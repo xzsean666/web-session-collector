@@ -121,6 +121,8 @@ API service configuration:
 | `APP_API_PORT` | No | API listen port, defaults to `10085` |
 | `APP_API_REQUEST_BODY_LIMIT_BYTES` | No | Maximum JSON body size, defaults to `1048576` |
 | `APP_ACCOUNT_CHECK_INTERVAL_MS` | No | Idle session monitor interval, defaults to `60000`; `0` disables scheduled checks |
+| `ACTIVE_NOVNC_PORT` | No | noVNC port for observing the API-active session, defaults to `10086` |
+| `IDLE_NOVNC_PORT` | No | noVNC port for manual login on idle/login-target sessions, defaults to `10087` |
 
 Collect CLI search-task configuration:
 
@@ -640,7 +642,7 @@ Inspect session state
 Serve API requests while keeping browser open
         |
         v
-Run one search task at a time
+Run one task at a time per target session
         |
         v
 Run scheduled session inspection while idle
@@ -695,7 +697,7 @@ Step 5 implementation will be accepted when:
 - concurrent search requests return `409 task_busy`
 - `/api/status` reports active task, last task, browser page, and session state
 - session inspection can report logged-out and verification-required states
-- Docker compose starts API and noVNC
+- Docker compose starts API, active noVNC, and idle/login noVNC
 - Docker compose persists `/data/chrome-user-data`
 - resources close cleanly when the API service is interrupted
 

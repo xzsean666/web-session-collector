@@ -11,6 +11,8 @@ export interface ApiSearchDefaults {
 export interface ApiConfig {
   readonly host: string;
   readonly port: number;
+  readonly activeNoVncPort: number;
+  readonly idleNoVncPort: number;
   readonly requestBodyLimitBytes: number;
   readonly accountCheckIntervalMs: number;
   readonly searchDefaults: ApiSearchDefaults;
@@ -19,6 +21,8 @@ export interface ApiConfig {
 const apiEnvironmentSchema = z.object({
   APP_API_HOST: z.string().optional(),
   APP_API_PORT: z.string().optional(),
+  ACTIVE_NOVNC_PORT: z.string().optional(),
+  IDLE_NOVNC_PORT: z.string().optional(),
   APP_API_REQUEST_BODY_LIMIT_BYTES: z.string().optional(),
   APP_ACCOUNT_CHECK_INTERVAL_MS: z.string().optional(),
   APP_SEARCH_RECENT_DAYS: z.string().optional(),
@@ -50,6 +54,20 @@ export function loadApiConfig(
       1,
       65_535,
       "APP_API_PORT"
+    ),
+    activeNoVncPort: parseIntegerInRange(
+      parsedEnvironment.data.ACTIVE_NOVNC_PORT,
+      10086,
+      1,
+      65_535,
+      "ACTIVE_NOVNC_PORT"
+    ),
+    idleNoVncPort: parseIntegerInRange(
+      parsedEnvironment.data.IDLE_NOVNC_PORT,
+      10087,
+      1,
+      65_535,
+      "IDLE_NOVNC_PORT"
     ),
     requestBodyLimitBytes: parseIntegerInRange(
       parsedEnvironment.data.APP_API_REQUEST_BODY_LIMIT_BYTES,

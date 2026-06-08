@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import {
@@ -13,8 +15,11 @@ import {
 import { openStartPageAction } from "../core/actions/open-start-page-action.js";
 import { verifyProfileAction } from "../core/actions/verify-profile-action.js";
 import { serializeError } from "../core/monitoring/logger.js";
-import type { SessionInspectionResult } from "../core/types/session-monitor.js";
-import type { RuntimeConfig } from "../core/types/runtime.js";
+import type {
+  SessionInspectionResult,
+  SessionState
+} from "../core/types/session-monitor.js";
+import type { ProfileConfig, RuntimeConfig } from "../core/types/runtime.js";
 import type { RuntimeSiteAdapter } from "../core/types/site-runtime.js";
 import { getRuntimeSiteAdapter } from "../sites/site-registry.js";
 import {
@@ -45,52 +50,25 @@ export interface BackgroundTaskSnapshot {
   readonly error: Readonly<Record<string, unknown>> | undefined;
 }
 
-export type SearchDispatchResult =
-  | {
-      readonly accepted: true;
-      readonly task: BackgroundTaskSnapshot;
-      readonly result: SearchTaskResult;
-      readonly session: SessionInspectionResult | undefined;
-    }
-  | {
-      readonly accepted: false;
-      readonly reason:
-        | "busy"
-        | "service_not_ready"
-        | "account_attention_required"
-        | "task_failed";
-      readonly statusCode: number;
-      readonly message: string;
-      readonly activeTask: BackgroundTaskSnapshot | undefined;
-      readonly session: SessionInspectionResult | undefined;
-    };
-
-export type SessionCheckDispatchResult =
-  | {
-      readonly accepted: true;
-      readonly session: SessionInspectionResult;
-    }
-  | {
-      readonly accepted: false;
-      readonly statusCode: number;
-      readonly message: string;
-      readonly activeTask: BackgroundTaskSnapshot | undefined;
-      readonly session: SessionInspectionResult | undefined;
-    };
-
-export interface BackgroundServiceStatus {
-  readonly lifecycle: BackgroundServiceLifecycle;
-  readonly startedAt: string | undefined;
-  readonly stoppedAt: string | undefined;
-  readonly siteKey: string;
+export interface WebSessionSnapshot {
+  readonly id: string;
+  readonly state: SessionState;
+  readonly isApiActive: boolean;
+  readonly isIdleNovncTarget: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly stateUpdatedAt: string | undefined;
+  readonly stateUpdatedBy: string | undefined;
   readonly browser: {
     readonly connectionMode: string;
     readonly headless: boolean;
     readonly channel: string;
     readonly executablePath: string | undefined;
     readonly userDataDir: string;
+    readonly profileName: string;
     readonly profileDirectory: string | undefined;
     readonly viewport: RuntimeConfig["browser"]["viewport"];
+    readonly ready: boolean;
   };
   readonly page: {
     readonly closed: boolean;
@@ -99,12 +77,71 @@ export interface BackgroundServiceStatus {
   };
   readonly activeTask: BackgroundTaskSnapshot | undefined;
   readonly lastTask: BackgroundTaskSnapshot | undefined;
-  readonly session: SessionInspectionResult | undefined;
+  readonly lastInspection: SessionInspectionResult | undefined;
   readonly monitor: {
-    readonly intervalMs: number;
+    readonly running: boolean;
     readonly lastCheckStartedAt: string | undefined;
     readonly lastCheckCompletedAt: string | undefined;
     readonly lastSkippedReason: string | undefined;
+  };
+  readonly error: Readonly<Record<string, unknown>> | undefined;
+}
+
+export type SearchDispatchResult =
+  | {
+      readonly accepted: true;
+      readonly task: BackgroundTaskSnapshot;
+      readonly result: SearchTaskResult;
+      readonly session: SessionInspectionResult | undefined;
+      readonly webSession: WebSessionSnapshot;
+    }
+  | {
+      readonly accepted: false;
+      readonly reason:
+        | "busy"
+        | "service_not_ready"
+        | "account_attention_required"
+        | "session_not_found"
+        | "task_failed";
+      readonly statusCode: number;
+      readonly message: string;
+      readonly activeTask: BackgroundTaskSnapshot | undefined;
+      readonly session: SessionInspectionResult | undefined;
+      readonly webSession: WebSessionSnapshot | undefined;
+    };
+
+export type SessionCheckDispatchResult =
+  | {
+      readonly accepted: true;
+      readonly session: SessionInspectionResult;
+      readonly webSession: WebSessionSnapshot;
+    }
+  | {
+      readonly accepted: false;
+      readonly statusCode: number;
+      readonly message: string;
+      readonly activeTask: BackgroundTaskSnapshot | undefined;
+      readonly session: SessionInspectionResult | undefined;
+      readonly webSession: WebSessionSnapshot | undefined;
+    };
+
+export interface BackgroundServiceStatus {
+  readonly lifecycle: BackgroundServiceLifecycle;
+  readonly startedAt: string | undefined;
+  readonly stoppedAt: string | undefined;
+  readonly siteKey: string;
+  readonly apiActiveSessionId: string | undefined;
+  readonly idleNovncSessionId: string | undefined;
+  readonly sessions: readonly WebSessionSnapshot[];
+  readonly activeSession: WebSessionSnapshot | undefined;
+  readonly idleNovncSession: WebSessionSnapshot | undefined;
+  readonly browser: WebSessionSnapshot["browser"];
+  readonly page: WebSessionSnapshot["page"];
+  readonly activeTask: BackgroundTaskSnapshot | undefined;
+  readonly lastTask: BackgroundTaskSnapshot | undefined;
+  readonly session: SessionInspectionResult | undefined;
+  readonly monitor: {
+    readonly intervalMs: number;
   };
   readonly error: Readonly<Record<string, unknown>> | undefined;
 }
@@ -115,24 +152,60 @@ export interface BackgroundBrowserServiceOptions {
   readonly logger: Logger;
 }
 
+export interface CreateWebSessionOptions {
+  readonly id?: string;
+  readonly activate?: boolean;
+  readonly idleNovnc?: boolean;
+}
+
+export type WebSessionOperationResult =
+  | {
+      readonly accepted: true;
+      readonly session: WebSessionSnapshot;
+      readonly status: BackgroundServiceStatus;
+    }
+  | {
+      readonly accepted: false;
+      readonly statusCode: number;
+      readonly code: string;
+      readonly message: string;
+      readonly session: WebSessionSnapshot | undefined;
+      readonly status: BackgroundServiceStatus;
+    };
+
+interface ManagedWebSession {
+  id: string;
+  profile: ProfileConfig;
+  browserSession: BrowserSession | undefined;
+  pageSession: PageSession | undefined;
+  createdAt: string;
+  updatedAt: string;
+  stateUpdatedAt: string | undefined;
+  stateUpdatedBy: string | undefined;
+  activeTask: BackgroundTaskSnapshot | undefined;
+  lastTask: BackgroundTaskSnapshot | undefined;
+  sessionInspection: SessionInspectionResult | undefined;
+  monitorRunning: boolean;
+  lastMonitorCheckStartedAt: string | undefined;
+  lastMonitorCheckCompletedAt: string | undefined;
+  lastMonitorSkippedReason: string | undefined;
+  lastError: Readonly<Record<string, unknown>> | undefined;
+}
+
+const DEFAULT_SESSION_ID = "default";
+
 export class BackgroundBrowserService {
   private readonly runtimeConfig: RuntimeConfig;
   private readonly runtimeSiteAdapter: RuntimeSiteAdapter;
   private readonly accountCheckIntervalMs: number;
   private readonly logger: Logger;
-  private browserSession: BrowserSession | undefined;
-  private pageSession: PageSession | undefined;
+  private readonly sessions = new Map<string, ManagedWebSession>();
   private lifecycle: BackgroundServiceLifecycle = "created";
   private startedAt: string | undefined;
   private stoppedAt: string | undefined;
-  private activeTask: BackgroundTaskSnapshot | undefined;
-  private lastTask: BackgroundTaskSnapshot | undefined;
-  private sessionInspection: SessionInspectionResult | undefined;
+  private apiActiveSessionId: string | undefined;
+  private idleNovncSessionId: string | undefined;
   private monitorTimer: NodeJS.Timeout | undefined;
-  private monitorRunning = false;
-  private lastMonitorCheckStartedAt: string | undefined;
-  private lastMonitorCheckCompletedAt: string | undefined;
-  private lastMonitorSkippedReason: string | undefined;
   private lastError: Readonly<Record<string, unknown>> | undefined;
 
   constructor(options: BackgroundBrowserServiceOptions) {
@@ -155,42 +228,19 @@ export class BackgroundBrowserService {
     this.lastError = undefined;
 
     try {
-      this.browserSession = await createBrowserSession(
-        this.runtimeConfig.profile,
-        this.runtimeConfig.browser,
-        this.logger
-      );
-      this.pageSession = await createPageSession(
-        this.browserSession.browserContext,
-        this.logger,
-        {
-          allowNewPage: this.runtimeConfig.browser.connectionMode !== "connect",
-          preferNewPage: false,
-          requiredExistingPageHostSuffix:
-            this.runtimeConfig.browser.connectionMode === "connect"
-              ? this.runtimeSiteAdapter.targetHostSuffix
-              : undefined
-        }
-      );
-
-      await verifyProfileAction(
-        this.pageSession,
-        this.runtimeConfig.profile,
-        this.logger
-      );
-      await openStartPageAction(
-        this.pageSession,
-        this.runtimeConfig.navigation,
-        this.logger
-      );
+      await this.createSessionInternal({
+        id: DEFAULT_SESSION_ID,
+        activate: true,
+        idleNovnc: true,
+        useBaseProfile: true
+      });
 
       this.lifecycle = "running";
-      await this.refreshSessionStatus("startup");
       this.startMonitor();
     } catch (error) {
       this.lifecycle = "failed";
       this.lastError = serializeError(error);
-      await this.closeSessions("startup_failed");
+      await this.closeAllSessions("startup_failed");
       throw error;
     }
   }
@@ -202,59 +252,232 @@ export class BackgroundBrowserService {
 
     this.lifecycle = "stopping";
     this.stopMonitor();
-    await this.closeSessions(reason);
+    await this.closeAllSessions(reason);
     this.stoppedAt = new Date().toISOString();
     this.lifecycle = "stopped";
   }
 
-  async runSearch(options: SearchTaskOptions): Promise<SearchDispatchResult> {
-    if (this.lifecycle !== "running" || this.pageSession === undefined) {
+  async createSession(
+    options: CreateWebSessionOptions = {}
+  ): Promise<WebSessionOperationResult> {
+    if (this.lifecycle !== "running") {
+      return {
+        accepted: false,
+        statusCode: 503,
+        code: "service_not_ready",
+        message: "Background browser service is not ready.",
+        session: undefined,
+        status: await this.getStatus()
+      };
+    }
+
+    if (
+      this.runtimeConfig.browser.connectionMode === "connect" &&
+      this.sessions.size > 0
+    ) {
+      return {
+        accepted: false,
+        statusCode: 409,
+        code: "unsupported_in_connect_mode",
+        message:
+          "Creating additional web sessions is only supported in launch mode.",
+        session: undefined,
+        status: await this.getStatus()
+      };
+    }
+
+    try {
+      const session = await this.createSessionInternal({
+        id: options.id,
+        activate: options.activate ?? false,
+        idleNovnc: options.idleNovnc ?? false,
+        useBaseProfile: false
+      });
+
+      return {
+        accepted: true,
+        session: await this.snapshotSession(session),
+        status: await this.getStatus()
+      };
+    } catch (error) {
+      this.lastError = serializeError(error);
+      return {
+        accepted: false,
+        statusCode: 400,
+        code: "session_create_failed",
+        message: error instanceof Error ? error.message : String(error),
+        session: undefined,
+        status: await this.getStatus()
+      };
+    }
+  }
+
+  async deleteSession(sessionId: string): Promise<WebSessionOperationResult> {
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return this.sessionNotFoundResult(sessionId);
+    }
+
+    if (session.activeTask !== undefined || session.monitorRunning) {
+      return {
+        accepted: false,
+        statusCode: 409,
+        code: "session_busy",
+        message: "Session is busy.",
+        session: await this.snapshotSession(session),
+        status: await this.getStatus()
+      };
+    }
+
+    await this.closeSession(session, "session_deleted");
+    this.sessions.delete(sessionId);
+
+    if (this.apiActiveSessionId === sessionId) {
+      this.apiActiveSessionId = undefined;
+    }
+
+    if (this.idleNovncSessionId === sessionId) {
+      this.idleNovncSessionId = undefined;
+    }
+
+    return {
+      accepted: true,
+      session: await this.snapshotClosedSession(session),
+      status: await this.getStatus()
+    };
+  }
+
+  async activateSession(sessionId: string): Promise<WebSessionOperationResult> {
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return this.sessionNotFoundResult(sessionId);
+    }
+
+    this.apiActiveSessionId = sessionId;
+    session.updatedAt = new Date().toISOString();
+    await this.bringSessionToFront(session);
+
+    return {
+      accepted: true,
+      session: await this.snapshotSession(session),
+      status: await this.getStatus()
+    };
+  }
+
+  async setIdleNovncSession(
+    sessionId: string
+  ): Promise<WebSessionOperationResult> {
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return this.sessionNotFoundResult(sessionId);
+    }
+
+    this.idleNovncSessionId = sessionId;
+    session.updatedAt = new Date().toISOString();
+    await this.bringSessionToFront(session);
+
+    return {
+      accepted: true,
+      session: await this.snapshotSession(session),
+      status: await this.getStatus()
+    };
+  }
+
+  async setSessionState(
+    sessionId: string,
+    state: SessionState,
+    updatedBy = "api"
+  ): Promise<WebSessionOperationResult> {
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return this.sessionNotFoundResult(sessionId);
+    }
+
+    const now = new Date().toISOString();
+    session.sessionInspection = this.createSyntheticInspection(session, state, now);
+    session.stateUpdatedAt = now;
+    session.stateUpdatedBy = updatedBy;
+    session.updatedAt = now;
+
+    return {
+      accepted: true,
+      session: await this.snapshotSession(session),
+      status: await this.getStatus()
+    };
+  }
+
+  async runSearch(
+    options: SearchTaskOptions,
+    sessionId = this.apiActiveSessionId
+  ): Promise<SearchDispatchResult> {
+    const session = this.resolveRunnableSession(sessionId);
+
+    if (!session.accepted) {
+      return session;
+    }
+
+    const webSession = session.session;
+    const pageSession = webSession.pageSession;
+
+    if (pageSession === undefined || pageSession.page.isClosed()) {
       return {
         accepted: false,
         reason: "service_not_ready",
         statusCode: 503,
-        message: "Background browser service is not ready.",
-        activeTask: this.activeTask,
-        session: this.sessionInspection
+        message: `Session "${webSession.id}" is not ready.`,
+        activeTask: webSession.activeTask,
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
-    if (this.activeTask !== undefined) {
+    if (webSession.activeTask !== undefined) {
       return {
         accepted: false,
         reason: "busy",
         statusCode: 409,
-        message: "Previous search task is still running.",
-        activeTask: this.activeTask,
-        session: this.sessionInspection
+        message: "Previous task is still running in this session.",
+        activeTask: webSession.activeTask,
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
-    if (this.monitorRunning) {
+    if (webSession.monitorRunning) {
       return {
         accepted: false,
         reason: "busy",
         statusCode: 409,
-        message: "Session monitor is still running.",
+        message: "Session monitor is still running in this session.",
         activeTask: undefined,
-        session: this.sessionInspection
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
-    const blockedMessage = this.readAccountAttentionMessage();
+    const blockedMessage = this.readAccountAttentionMessage(webSession);
 
     if (blockedMessage !== undefined) {
       return {
         accepted: false,
         reason: "account_attention_required",
-        statusCode: this.sessionInspection?.state === "logged_out" ? 428 : 423,
+        statusCode:
+          webSession.sessionInspection?.state === "logged_out" ? 428 : 423,
         message: blockedMessage,
         activeTask: undefined,
-        session: this.sessionInspection
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
+    await this.bringSessionToFront(webSession);
+
     const task = this.createRunningTask("search", {
+      sessionId: webSession.id,
       siteKey: options.siteKey,
       keywords: options.keywords,
       recentDays: options.recentDays,
@@ -262,15 +485,16 @@ export class BackgroundBrowserService {
       scrollCount: options.scrollCount,
       fetchContent: options.fetchContent
     });
-    this.activeTask = task;
+    webSession.activeTask = task;
+    webSession.updatedAt = new Date().toISOString();
 
     try {
       const result = await runSearchTaskOnPage(
-        this.pageSession,
+        pageSession,
         options,
         this.logger
       );
-      const completedTask = this.completeTask(task, {
+      const completedTask = this.completeTask(webSession, task, {
         keywordCount: result.results.length,
         itemCount: result.results.reduce(
           (totalCount, keywordResult) =>
@@ -279,23 +503,25 @@ export class BackgroundBrowserService {
         )
       });
 
-      await this.refreshSessionStatus("after_search");
+      await this.refreshSessionStatus(webSession, "after_search");
 
       return {
         accepted: true,
         task: completedTask,
         result,
-        session: this.sessionInspection
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     } catch (error) {
-      const failedTask = this.failTask(task, error);
-      this.lastError = serializeError(error);
-      await this.refreshSessionStatus("after_search_error").catch(
+      const failedTask = this.failTask(webSession, task, error);
+      webSession.lastError = serializeError(error);
+      await this.refreshSessionStatus(webSession, "after_search_error").catch(
         (monitorError: unknown) => {
           this.logger.warn(
             {
               module: "background_service",
               stage: "post_error_session_check_failed",
+              sessionId: webSession.id,
               error: serializeError(monitorError)
             },
             "Session inspection failed after search error."
@@ -309,60 +535,321 @@ export class BackgroundBrowserService {
         statusCode: 500,
         message: "Search task failed.",
         activeTask: failedTask,
-        session: this.sessionInspection
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     } finally {
-      this.activeTask = undefined;
+      webSession.activeTask = undefined;
+      webSession.updatedAt = new Date().toISOString();
     }
   }
 
-  async requestSessionCheck(reason = "manual"): Promise<SessionCheckDispatchResult> {
-    if (this.lifecycle !== "running" || this.pageSession === undefined) {
+  async requestSessionCheck(
+    reason = "manual",
+    sessionId = this.apiActiveSessionId
+  ): Promise<SessionCheckDispatchResult> {
+    const session = this.resolveRunnableSession(sessionId);
+
+    if (!session.accepted) {
       return {
         accepted: false,
-        statusCode: 503,
-        message: "Background browser service is not ready.",
-        activeTask: this.activeTask,
-        session: this.sessionInspection
+        statusCode: session.statusCode,
+        message: session.message,
+        activeTask: session.activeTask,
+        session: session.session,
+        webSession: session.webSession
       };
     }
 
-    if (this.activeTask !== undefined) {
+    const webSession = session.session;
+
+    if (webSession.activeTask !== undefined) {
       return {
         accepted: false,
         statusCode: 409,
-        message: "Search task is still running.",
-        activeTask: this.activeTask,
-        session: this.sessionInspection
+        message: "Task is still running in this session.",
+        activeTask: webSession.activeTask,
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
-    if (this.monitorRunning) {
+    if (webSession.monitorRunning) {
       return {
         accepted: false,
         statusCode: 409,
-        message: "Session monitor is still running.",
+        message: "Session monitor is still running in this session.",
         activeTask: undefined,
-        session: this.sessionInspection
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
       };
     }
 
-    this.monitorRunning = true;
+    webSession.monitorRunning = true;
 
     try {
       return {
         accepted: true,
-        session: await this.refreshSessionStatus(reason)
+        session: await this.refreshSessionStatus(webSession, reason),
+        webSession: await this.snapshotSession(webSession)
       };
     } finally {
-      this.monitorRunning = false;
+      webSession.monitorRunning = false;
     }
   }
 
-  async refreshSessionStatus(reason = "manual"): Promise<SessionInspectionResult> {
-    if (this.pageSession === undefined) {
+  async getStatus(): Promise<BackgroundServiceStatus> {
+    const sessions = await Promise.all(
+      Array.from(this.sessions.values()).map((session) =>
+        this.snapshotSession(session)
+      )
+    );
+    const activeSession = sessions.find(
+      (session) => session.id === this.apiActiveSessionId
+    );
+    const idleNovncSession = sessions.find(
+      (session) => session.id === this.idleNovncSessionId
+    );
+
+    return {
+      lifecycle: this.lifecycle,
+      startedAt: this.startedAt,
+      stoppedAt: this.stoppedAt,
+      siteKey: this.runtimeSiteAdapter.siteKey,
+      apiActiveSessionId: this.apiActiveSessionId,
+      idleNovncSessionId: this.idleNovncSessionId,
+      sessions,
+      activeSession,
+      idleNovncSession,
+      browser: activeSession?.browser ?? this.emptyBrowserStatus(),
+      page: activeSession?.page ?? this.emptyPageStatus(),
+      activeTask: activeSession?.activeTask,
+      lastTask: activeSession?.lastTask,
+      session: activeSession?.lastInspection,
+      monitor: {
+        intervalMs: this.accountCheckIntervalMs
+      },
+      error: this.lastError
+    };
+  }
+
+  private async createSessionInternal(options: {
+    readonly id: string | undefined;
+    readonly activate: boolean;
+    readonly idleNovnc: boolean;
+    readonly useBaseProfile: boolean;
+  }): Promise<ManagedWebSession> {
+    const sessionId = this.normalizeSessionId(options.id ?? randomUUID());
+
+    if (this.sessions.has(sessionId)) {
+      throw new Error(`Session "${sessionId}" already exists.`);
+    }
+
+    const profile = this.createProfileForSession(sessionId, options.useBaseProfile);
+    mkdirSync(profile.userDataDir, { recursive: true });
+
+    const createdAt = new Date().toISOString();
+    const session: ManagedWebSession = {
+      id: sessionId,
+      profile,
+      browserSession: undefined,
+      pageSession: undefined,
+      createdAt,
+      updatedAt: createdAt,
+      stateUpdatedAt: undefined,
+      stateUpdatedBy: undefined,
+      activeTask: undefined,
+      lastTask: undefined,
+      sessionInspection: undefined,
+      monitorRunning: false,
+      lastMonitorCheckStartedAt: undefined,
+      lastMonitorCheckCompletedAt: undefined,
+      lastMonitorSkippedReason: undefined,
+      lastError: undefined
+    };
+
+    this.sessions.set(sessionId, session);
+
+    try {
+      session.browserSession = await createBrowserSession(
+        profile,
+        this.runtimeConfig.browser,
+        this.logger
+      );
+      session.pageSession = await createPageSession(
+        session.browserSession.browserContext,
+        this.logger,
+        {
+          allowNewPage: this.runtimeConfig.browser.connectionMode !== "connect",
+          preferNewPage: false,
+          requiredExistingPageHostSuffix:
+            this.runtimeConfig.browser.connectionMode === "connect"
+              ? this.runtimeSiteAdapter.targetHostSuffix
+              : undefined
+        }
+      );
+
+      await verifyProfileAction(
+        session.pageSession,
+        profile,
+        this.logger
+      );
+      await openStartPageAction(
+        session.pageSession,
+        this.runtimeConfig.navigation,
+        this.logger
+      );
+
+      if (options.activate) {
+        this.apiActiveSessionId = sessionId;
+      }
+
+      if (options.idleNovnc) {
+        this.idleNovncSessionId = sessionId;
+      }
+
+      await this.refreshSessionStatus(session, "startup");
+      await this.bringSessionToFront(session);
+
+      this.logger.info(
+        {
+          module: "background_service",
+          stage: "web_session_created",
+          sessionId,
+          userDataDir: profile.userDataDir,
+          isApiActive: this.apiActiveSessionId === sessionId,
+          isIdleNovncTarget: this.idleNovncSessionId === sessionId
+        },
+        "Web session created."
+      );
+
+      return session;
+    } catch (error) {
+      session.lastError = serializeError(error);
+      await this.closeSession(session, "session_create_failed").catch(
+        (closeError: unknown) => {
+          this.logger.warn(
+            {
+              module: "background_service",
+              stage: "session_create_cleanup_failed",
+              sessionId,
+              error: serializeError(closeError)
+            },
+            "Failed to clean up partially created web session."
+          );
+        }
+      );
+      this.sessions.delete(sessionId);
+      throw error;
+    }
+  }
+
+  private createProfileForSession(
+    sessionId: string,
+    useBaseProfile: boolean
+  ): ProfileConfig {
+    if (useBaseProfile) {
+      return this.runtimeConfig.profile;
+    }
+
+    return {
+      profileName: `${this.runtimeConfig.profile.profileName}-${sessionId}`,
+      userDataDir: path.join(
+        this.runtimeConfig.profile.userDataDir,
+        "sessions",
+        sessionId
+      )
+    };
+  }
+
+  private normalizeSessionId(sessionId: string): string {
+    const normalizedSessionId = sessionId.trim();
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(normalizedSessionId)) {
+      throw new Error(
+        "Session id must be 1-64 characters and contain only letters, numbers, underscore, or dash."
+      );
+    }
+
+    return normalizedSessionId;
+  }
+
+  private resolveRunnableSession(
+    sessionId: string | undefined
+  ):
+    | { readonly accepted: true; readonly session: ManagedWebSession }
+    | {
+        readonly accepted: false;
+        readonly reason: "service_not_ready" | "session_not_found";
+        readonly statusCode: number;
+        readonly message: string;
+        readonly activeTask: BackgroundTaskSnapshot | undefined;
+        readonly session: SessionInspectionResult | undefined;
+        readonly webSession: WebSessionSnapshot | undefined;
+      } {
+    if (this.lifecycle !== "running") {
+      return {
+        accepted: false,
+        reason: "service_not_ready",
+        statusCode: 503,
+        message: "Background browser service is not ready.",
+        activeTask: undefined,
+        session: undefined,
+        webSession: undefined
+      };
+    }
+
+    if (sessionId === undefined) {
+      return {
+        accepted: false,
+        reason: "service_not_ready",
+        statusCode: 409,
+        message: "No API-active session is selected.",
+        activeTask: undefined,
+        session: undefined,
+        webSession: undefined
+      };
+    }
+
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return {
+        accepted: false,
+        reason: "session_not_found",
+        statusCode: 404,
+        message: `Session "${sessionId}" was not found.`,
+        activeTask: undefined,
+        session: undefined,
+        webSession: undefined
+      };
+    }
+
+    if (session.pageSession === undefined || session.pageSession.page.isClosed()) {
+      return {
+        accepted: false,
+        reason: "service_not_ready",
+        statusCode: 503,
+        message: `Session "${sessionId}" is not ready.`,
+        activeTask: session.activeTask,
+        session: session.sessionInspection,
+        webSession: undefined
+      };
+    }
+
+    return {
+      accepted: true,
+      session
+    };
+  }
+
+  private async refreshSessionStatus(
+    session: ManagedWebSession,
+    reason = "manual"
+  ): Promise<SessionInspectionResult> {
+    if (session.pageSession === undefined) {
       const checkedAt = new Date().toISOString();
-      this.sessionInspection = {
+      session.sessionInspection = {
         siteKey: this.runtimeSiteAdapter.siteKey,
         state: "browser_closed",
         checkedAt,
@@ -378,45 +865,49 @@ export class BackgroundBrowserService {
         ],
         errorMessage: undefined
       };
-      return this.sessionInspection;
+      session.updatedAt = checkedAt;
+      return session.sessionInspection;
     }
 
-    this.lastMonitorCheckStartedAt = new Date().toISOString();
-    this.lastMonitorSkippedReason = undefined;
+    session.lastMonitorCheckStartedAt = new Date().toISOString();
+    session.lastMonitorSkippedReason = undefined;
 
     try {
-      this.sessionInspection =
+      session.sessionInspection =
         this.runtimeSiteAdapter.inspectSession === undefined
-          ? await this.inspectSessionWithCurrentAccountFallback()
+          ? await this.inspectSessionWithCurrentAccountFallback(session)
           : await this.runtimeSiteAdapter.inspectSession(
-              this.pageSession,
+              session.pageSession,
               this.logger
             );
-      this.lastMonitorCheckCompletedAt = new Date().toISOString();
+      session.lastMonitorCheckCompletedAt = new Date().toISOString();
+      session.updatedAt = session.lastMonitorCheckCompletedAt;
 
       this.logger.info(
         {
           module: "background_service",
           stage: "session_status_checked",
+          sessionId: session.id,
           reason,
-          state: this.sessionInspection.state,
-          indicatorCodes: this.sessionInspection.indicators.map(
+          state: session.sessionInspection.state,
+          indicatorCodes: session.sessionInspection.indicators.map(
             (indicator) => indicator.code
           )
         },
         "Session status checked."
       );
 
-      return this.sessionInspection;
+      return session.sessionInspection;
     } catch (error) {
-      this.lastMonitorCheckCompletedAt = new Date().toISOString();
-      this.lastError = serializeError(error);
-      this.sessionInspection = {
+      session.lastMonitorCheckCompletedAt = new Date().toISOString();
+      session.lastError = serializeError(error);
+      session.updatedAt = session.lastMonitorCheckCompletedAt;
+      session.sessionInspection = {
         siteKey: this.runtimeSiteAdapter.siteKey,
         state: "error",
         checkedAt: new Date().toISOString(),
-        pageUrl: this.pageSession.page.url(),
-        pageTitle: await this.pageSession.page.title().catch(() => ""),
+        pageUrl: session.pageSession.page.url(),
+        pageTitle: await session.pageSession.page.title().catch(() => ""),
         currentAccount: undefined,
         indicators: [
           {
@@ -427,45 +918,31 @@ export class BackgroundBrowserService {
         ],
         errorMessage: error instanceof Error ? error.message : String(error)
       };
-      return this.sessionInspection;
+      return session.sessionInspection;
     }
   }
 
-  async getStatus(): Promise<BackgroundServiceStatus> {
-    const page = this.pageSession?.page;
+  private async inspectSessionWithCurrentAccountFallback(
+    session: ManagedWebSession
+  ): Promise<SessionInspectionResult> {
+    if (session.pageSession === undefined) {
+      throw new Error("Page session is not available.");
+    }
+
+    const currentAccount = await this.runtimeSiteAdapter.getCurrentAccount(
+      session.pageSession,
+      this.logger
+    );
 
     return {
-      lifecycle: this.lifecycle,
-      startedAt: this.startedAt,
-      stoppedAt: this.stoppedAt,
       siteKey: this.runtimeSiteAdapter.siteKey,
-      browser: {
-        connectionMode: this.runtimeConfig.browser.connectionMode,
-        headless: this.runtimeConfig.browser.headless,
-        channel: this.runtimeConfig.browser.channel,
-        executablePath: this.runtimeConfig.browser.executablePath,
-        userDataDir: this.runtimeConfig.profile.userDataDir,
-        profileDirectory: this.runtimeConfig.browser.profileDirectory,
-        viewport: this.runtimeConfig.browser.viewport
-      },
-      page: {
-        closed: page === undefined || page.isClosed(),
-        url: page?.url() ?? "",
-        title:
-          page === undefined || page.isClosed()
-            ? ""
-            : await page.title().catch(() => "")
-      },
-      activeTask: this.activeTask,
-      lastTask: this.lastTask,
-      session: this.sessionInspection,
-      monitor: {
-        intervalMs: this.accountCheckIntervalMs,
-        lastCheckStartedAt: this.lastMonitorCheckStartedAt,
-        lastCheckCompletedAt: this.lastMonitorCheckCompletedAt,
-        lastSkippedReason: this.lastMonitorSkippedReason
-      },
-      error: this.lastError
+      state: currentAccount.found ? "logged_in" : "unknown",
+      checkedAt: new Date().toISOString(),
+      pageUrl: session.pageSession.page.url(),
+      pageTitle: await session.pageSession.page.title().catch(() => ""),
+      currentAccount,
+      indicators: [],
+      errorMessage: undefined
     };
   }
 
@@ -490,67 +967,53 @@ export class BackgroundBrowserService {
   }
 
   private async runScheduledMonitor(): Promise<void> {
-    if (this.monitorRunning) {
-      this.lastMonitorSkippedReason = "previous_monitor_still_running";
-      return;
-    }
-
-    if (this.activeTask !== undefined) {
-      this.lastMonitorSkippedReason = "task_running";
-      return;
-    }
-
     if (this.lifecycle !== "running") {
-      this.lastMonitorSkippedReason = "service_not_running";
       return;
     }
 
-    this.monitorRunning = true;
+    for (const session of this.sessions.values()) {
+      if (session.monitorRunning) {
+        session.lastMonitorSkippedReason = "previous_monitor_still_running";
+        continue;
+      }
 
-    try {
-      await this.refreshSessionStatus("scheduled");
-    } finally {
-      this.monitorRunning = false;
+      if (session.activeTask !== undefined) {
+        session.lastMonitorSkippedReason = "task_running";
+        continue;
+      }
+
+      if (session.pageSession === undefined || session.pageSession.page.isClosed()) {
+        session.lastMonitorSkippedReason = "page_not_ready";
+        continue;
+      }
+
+      session.monitorRunning = true;
+
+      try {
+        await this.refreshSessionStatus(session, "scheduled");
+      } finally {
+        session.monitorRunning = false;
+      }
     }
   }
 
-  private async inspectSessionWithCurrentAccountFallback(): Promise<SessionInspectionResult> {
-    if (this.pageSession === undefined) {
-      throw new Error("Page session is not available.");
-    }
-
-    const currentAccount = await this.runtimeSiteAdapter.getCurrentAccount(
-      this.pageSession,
-      this.logger
-    );
-
-    return {
-      siteKey: this.runtimeSiteAdapter.siteKey,
-      state: currentAccount.found ? "logged_in" : "unknown",
-      checkedAt: new Date().toISOString(),
-      pageUrl: this.pageSession.page.url(),
-      pageTitle: await this.pageSession.page.title().catch(() => ""),
-      currentAccount,
-      indicators: [],
-      errorMessage: undefined
-    };
-  }
-
-  private readAccountAttentionMessage(): string | undefined {
-    if (this.sessionInspection === undefined) {
+  private readAccountAttentionMessage(
+    session: ManagedWebSession
+  ): string | undefined {
+    if (session.sessionInspection === undefined) {
       return undefined;
     }
 
-    if (this.sessionInspection.state === "challenge_required") {
-      return "Current browser session needs manual verification before more search tasks run.";
+    if (session.sessionInspection.state === "challenge_required") {
+      return "Current browser session needs manual verification through idle noVNC before more search tasks run.";
     }
 
-    if (this.sessionInspection.state === "logged_out") {
-      return "Current browser session appears logged out. Log in through noVNC before searching.";
+    if (session.sessionInspection.state === "logged_out") {
+      return "Current browser session appears logged out. Log in through idle noVNC before searching.";
     }
 
-    if (this.sessionInspection.state === "browser_closed") {
-      return "Browser page is closed. Restart the API service.";
+    if (session.sessionInspection.state === "browser_closed") {
+      return "Browser page is closed. Restart or recreate the session.";
     }
 
     return undefined;
@@ -573,6 +1036,7 @@ export class BackgroundBrowserService {
   }
 
   private completeTask(
+    session: ManagedWebSession,
     task: BackgroundTaskSnapshot,
     resultSummary: Readonly<Record<string, unknown>>
   ): BackgroundTaskSnapshot {
@@ -584,11 +1048,12 @@ export class BackgroundBrowserService {
       error: undefined
     };
 
-    this.lastTask = completedTask;
+    session.lastTask = completedTask;
     return completedTask;
   }
 
   private failTask(
+    session: ManagedWebSession,
     task: BackgroundTaskSnapshot,
     error: unknown
   ): BackgroundTaskSnapshot {
@@ -600,52 +1065,72 @@ export class BackgroundBrowserService {
       error: serializeError(error)
     };
 
-    this.lastTask = failedTask;
+    session.lastTask = failedTask;
     return failedTask;
   }
 
-  private async closeSessions(reason: string): Promise<void> {
+  private createSyntheticInspection(
+    session: ManagedWebSession,
+    state: SessionState,
+    checkedAt: string
+  ): SessionInspectionResult {
+    return {
+      siteKey: this.runtimeSiteAdapter.siteKey,
+      state,
+      checkedAt,
+      pageUrl: session.pageSession?.page.url() ?? "",
+      pageTitle:
+        session.pageSession === undefined || session.pageSession.page.isClosed()
+          ? ""
+          : "",
+      currentAccount: session.sessionInspection?.currentAccount,
+      indicators: [
+        {
+          code: "api_state_update",
+          severity: "info",
+          message: "Session state was updated through the API."
+        }
+      ],
+      errorMessage: undefined
+    };
+  }
+
+  private async bringSessionToFront(session: ManagedWebSession): Promise<void> {
+    if (session.pageSession === undefined || session.pageSession.page.isClosed()) {
+      return;
+    }
+
+    await session.pageSession.page.bringToFront().catch((error: unknown) => {
+      this.logger.warn(
+        {
+          module: "background_service",
+          stage: "bring_to_front_failed",
+          sessionId: session.id,
+          error: serializeError(error)
+        },
+        "Failed to bring web session page to front."
+      );
+    });
+  }
+
+  private async closeAllSessions(reason: string): Promise<void> {
     this.logger.info(
       {
         module: "background_service",
         stage: "shutdown_started",
-        reason
+        reason,
+        sessionCount: this.sessions.size
       },
       "Background browser service shutdown started."
     );
 
-    if (this.pageSession !== undefined) {
-      await closePageSession(this.pageSession, this.logger).catch(
-        (error: unknown) => {
-          this.logger.warn(
-            {
-              module: "background_service",
-              stage: "page_close_failed",
-              error: serializeError(error)
-            },
-            "Failed to close page session during shutdown."
-          );
-        }
-      );
+    for (const session of this.sessions.values()) {
+      await this.closeSession(session, reason);
     }
 
-    if (this.browserSession !== undefined) {
-      await closeBrowserSession(this.browserSession, this.logger).catch(
-        (error: unknown) => {
-          this.logger.warn(
-            {
-              module: "background_service",
-              stage: "browser_close_failed",
-              error: serializeError(error)
-            },
-            "Failed to close browser session during shutdown."
-          );
-        }
-      );
-    }
-
-    this.pageSession = undefined;
-    this.browserSession = undefined;
+    this.sessions.clear();
+    this.apiActiveSessionId = undefined;
+    this.idleNovncSessionId = undefined;
 
     this.logger.info(
       {
@@ -655,5 +1140,158 @@ export class BackgroundBrowserService {
       },
       "Background browser service shutdown completed."
     );
+  }
+
+  private async closeSession(
+    session: ManagedWebSession,
+    reason: string
+  ): Promise<void> {
+    this.logger.info(
+      {
+        module: "background_service",
+        stage: "session_shutdown_started",
+        reason,
+        sessionId: session.id
+      },
+      "Web session shutdown started."
+    );
+
+    if (session.pageSession !== undefined) {
+      await closePageSession(session.pageSession, this.logger).catch(
+        (error: unknown) => {
+          this.logger.warn(
+            {
+              module: "background_service",
+              stage: "page_close_failed",
+              sessionId: session.id,
+              error: serializeError(error)
+            },
+            "Failed to close page session during shutdown."
+          );
+        }
+      );
+    }
+
+    if (session.browserSession !== undefined) {
+      await closeBrowserSession(session.browserSession, this.logger).catch(
+        (error: unknown) => {
+          this.logger.warn(
+            {
+              module: "background_service",
+              stage: "browser_close_failed",
+              sessionId: session.id,
+              error: serializeError(error)
+            },
+            "Failed to close browser session during shutdown."
+          );
+        }
+      );
+    }
+
+    session.pageSession = undefined;
+    session.browserSession = undefined;
+    session.sessionInspection = this.createSyntheticInspection(
+      session,
+      "browser_closed",
+      new Date().toISOString()
+    );
+    session.updatedAt = new Date().toISOString();
+
+    this.logger.info(
+      {
+        module: "background_service",
+        stage: "session_shutdown_completed",
+        reason,
+        sessionId: session.id
+      },
+      "Web session shutdown completed."
+    );
+  }
+
+  private async snapshotSession(
+    session: ManagedWebSession
+  ): Promise<WebSessionSnapshot> {
+    const page = session.pageSession?.page;
+
+    return {
+      id: session.id,
+      state: session.sessionInspection?.state ?? "unknown",
+      isApiActive: this.apiActiveSessionId === session.id,
+      isIdleNovncTarget: this.idleNovncSessionId === session.id,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      stateUpdatedAt: session.stateUpdatedAt,
+      stateUpdatedBy: session.stateUpdatedBy,
+      browser: {
+        connectionMode: this.runtimeConfig.browser.connectionMode,
+        headless: this.runtimeConfig.browser.headless,
+        channel: this.runtimeConfig.browser.channel,
+        executablePath: this.runtimeConfig.browser.executablePath,
+        userDataDir: session.profile.userDataDir,
+        profileName: session.profile.profileName,
+        profileDirectory: this.runtimeConfig.browser.profileDirectory,
+        viewport: this.runtimeConfig.browser.viewport,
+        ready: session.browserSession !== undefined
+      },
+      page: {
+        closed: page === undefined || page.isClosed(),
+        url: page?.url() ?? "",
+        title:
+          page === undefined || page.isClosed()
+            ? ""
+            : await page.title().catch(() => "")
+      },
+      activeTask: session.activeTask,
+      lastTask: session.lastTask,
+      lastInspection: session.sessionInspection,
+      monitor: {
+        running: session.monitorRunning,
+        lastCheckStartedAt: session.lastMonitorCheckStartedAt,
+        lastCheckCompletedAt: session.lastMonitorCheckCompletedAt,
+        lastSkippedReason: session.lastMonitorSkippedReason
+      },
+      error: session.lastError
+    };
+  }
+
+  private async snapshotClosedSession(
+    session: ManagedWebSession
+  ): Promise<WebSessionSnapshot> {
+    return this.snapshotSession(session);
+  }
+
+  private async sessionNotFoundResult(
+    sessionId: string
+  ): Promise<WebSessionOperationResult> {
+    return {
+      accepted: false,
+      statusCode: 404,
+      code: "session_not_found",
+      message: `Session "${sessionId}" was not found.`,
+      session: undefined,
+      status: await this.getStatus()
+    };
+  }
+
+  private emptyBrowserStatus(): WebSessionSnapshot["browser"] {
+    return {
+      connectionMode: this.runtimeConfig.browser.connectionMode,
+      headless: this.runtimeConfig.browser.headless,
+      channel: this.runtimeConfig.browser.channel,
+      executablePath: this.runtimeConfig.browser.executablePath,
+      userDataDir: this.runtimeConfig.profile.userDataDir,
+      profileName: this.runtimeConfig.profile.profileName,
+      profileDirectory: this.runtimeConfig.browser.profileDirectory,
+      viewport: this.runtimeConfig.browser.viewport,
+      ready: false
+    };
+  }
+
+  private emptyPageStatus(): WebSessionSnapshot["page"] {
+    return {
+      closed: true,
+      url: "",
+      title: ""
+    };
   }
 }

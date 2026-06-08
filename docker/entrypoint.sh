@@ -17,7 +17,8 @@ rm -f "${APP_USER_DATA_DIR}/SingletonLock" \
 export DISPLAY="${DISPLAY:-:99}"
 VNC_RESOLUTION="${VNC_RESOLUTION:-1366x768x24}"
 VNC_PORT="${VNC_PORT:-5900}"
-NOVNC_PORT="${NOVNC_PORT:-10086}"
+ACTIVE_NOVNC_PORT="${ACTIVE_NOVNC_PORT:-10086}"
+IDLE_NOVNC_PORT="${IDLE_NOVNC_PORT:-10087}"
 
 Xvfb "${DISPLAY}" -screen 0 "${VNC_RESOLUTION}" -nolisten tcp >/tmp/xvfb.log 2>&1 &
 
@@ -47,6 +48,10 @@ else
 fi
 
 x11vnc "${X11VNC_ARGS[@]}" >/tmp/x11vnc.log 2>&1 &
-websockify --web=/usr/share/novnc "${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" >/tmp/novnc.log 2>&1 &
+websockify --web=/usr/share/novnc "${ACTIVE_NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" >/tmp/active-novnc.log 2>&1 &
+
+if [[ "${IDLE_NOVNC_PORT}" != "${ACTIVE_NOVNC_PORT}" ]]; then
+  websockify --web=/usr/share/novnc "${IDLE_NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" >/tmp/idle-novnc.log 2>&1 &
+fi
 
 exec "$@"

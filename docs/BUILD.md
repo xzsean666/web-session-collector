@@ -81,7 +81,8 @@ APP_API_HOST=0.0.0.0
 APP_API_PORT=10085
 APP_API_REQUEST_BODY_LIMIT_BYTES=1048576
 APP_ACCOUNT_CHECK_INTERVAL_MS=60000
-NOVNC_PORT=10086
+ACTIVE_NOVNC_PORT=10086
+IDLE_NOVNC_PORT=10087
 APP_TASK=search
 APP_SEARCH_RECENT_DAYS=30
 APP_SEARCH_LIMIT=10
@@ -116,7 +117,8 @@ Defaults:
 | `APP_API_PORT` | `10085` |
 | `APP_API_REQUEST_BODY_LIMIT_BYTES` | `1048576` |
 | `APP_ACCOUNT_CHECK_INTERVAL_MS` | `60000` |
-| `NOVNC_PORT` | `10086` |
+| `ACTIVE_NOVNC_PORT` | `10086` |
+| `IDLE_NOVNC_PORT` | `10087` |
 | `APP_TASK` | `search` |
 | `APP_SEARCH_RECENT_DAYS` | `30` |
 | `APP_SEARCH_LIMIT` | `10` |
@@ -269,10 +271,16 @@ Docker noVNC deployment:
 docker compose up --build
 ```
 
-Open noVNC:
+Open active noVNC:
 
 ```text
 http://127.0.0.1:10086/vnc.html
+```
+
+Open idle/login noVNC:
+
+```text
+http://127.0.0.1:10087/vnc.html
 ```
 
 Default noVNC access:
@@ -297,8 +305,8 @@ Docker persistence:
 
 - compose stores Chrome user data in the named volume `chrome-user-data`
 - inside the container the persistent profile path is `/data/chrome-user-data`
-- manual Xiaohongshu login through noVNC survives container restarts as long as
-  the volume is not removed
+- manual Xiaohongshu login through idle noVNC survives container restarts as
+  long as the volume is not removed
 - `docker compose down` keeps the volume
 - `docker compose down -v` removes the login/profile data
 
@@ -387,8 +395,8 @@ User responsibilities:
 
 - log in to Xiaohongshu inside the isolated automation profile if the run needs
   authenticated user information
-- in API mode, use the visible browser window or Docker noVNC page to complete
-  login manually
+- in API mode, use the visible browser window or Docker idle noVNC page to
+  complete login manually
 - after manual login, call `POST /api/session/check` or wait for the scheduled
   session monitor to refresh account state
 - start Chrome with the intended profile and remote debugging port when using

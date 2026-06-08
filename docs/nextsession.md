@@ -128,7 +128,8 @@ APP_PROFILE_DIRECTORY=Default
 APP_INTERACTIVE_LOGIN_ON_MISSING_USER=false
 APP_API_HOST=0.0.0.0
 APP_API_PORT=10085
-NOVNC_PORT=10086
+ACTIVE_NOVNC_PORT=10086
+IDLE_NOVNC_PORT=10087
 APP_ACCOUNT_CHECK_INTERVAL_MS=60000
 APP_TASK=search
 APP_SEARCH_SITE=xiaohongshu
@@ -145,8 +146,9 @@ Immediate validation for the next session:
 3. Optionally run `pnpm run api` with a prepared visible Chrome environment.
 4. Call `GET /api/status`.
 5. Call `POST /api/xiaohongshu/search`.
-6. Optionally run `docker compose up --build` and open
-   `http://127.0.0.1:10086/vnc.html`.
+6. Optionally run `docker compose up --build` and open active noVNC at
+   `http://127.0.0.1:10086/vnc.html` and idle noVNC at
+   `http://127.0.0.1:10087/vnc.html`.
 
 Next feature candidates:
 

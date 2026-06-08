@@ -5,10 +5,12 @@ services:
     shm_size: "2gb"
     ports:
       - "0.0.0.0:${APP_API_PORT:-10085}:${APP_API_PORT:-10085}"
-      - "0.0.0.0:${NOVNC_PORT:-10086}:${NOVNC_PORT:-10086}"
+      - "0.0.0.0:${ACTIVE_NOVNC_PORT:-10086}:${ACTIVE_NOVNC_PORT:-10086}"
+      - "0.0.0.0:${IDLE_NOVNC_PORT:-10087}:${IDLE_NOVNC_PORT:-10087}"
     environment:
       VNC_PASSWORD: "${VNC_PASSWORD:-}"
-      NOVNC_PORT: "${NOVNC_PORT:-10086}"
+      ACTIVE_NOVNC_PORT: "${ACTIVE_NOVNC_PORT:-10086}"
+      IDLE_NOVNC_PORT: "${IDLE_NOVNC_PORT:-10087}"
       APP_SITE: xiaohongshu
       APP_USER_DATA_DIR: /data/chrome-user-data
       APP_PROFILE_NAME: docker-xiaohongshu
