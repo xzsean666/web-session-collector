@@ -20,7 +20,8 @@ const searchRequestSchema = z
     limit: z.coerce.number().int().min(1).max(100).optional(),
     limitPerKeyword: z.coerce.number().int().min(1).max(100).optional(),
     scrollCount: z.coerce.number().int().min(0).max(20).optional(),
-    fetchContent: z.boolean().optional()
+    fetchContent: z.boolean().optional(),
+    excludeItemIds: z.array(z.string().min(1)).max(50_000).optional()
   })
   .strict();
 
@@ -253,7 +254,8 @@ async function handleXiaohongshuSearch(
       context.apiConfig.searchDefaults.scrollCount,
     fetchContent:
       parsedBody.data.fetchContent ??
-      context.apiConfig.searchDefaults.fetchContent
+      context.apiConfig.searchDefaults.fetchContent,
+    excludeItemIds: parsedBody.data.excludeItemIds ?? []
   });
 
   if (!dispatchResult.accepted) {

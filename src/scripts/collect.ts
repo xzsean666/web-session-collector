@@ -62,7 +62,8 @@ async function main(): Promise<void> {
       recentDays: cliOptions.recentDays,
       limitPerKeyword: cliOptions.limitPerKeyword,
       scrollCount: cliOptions.scrollCount,
-      fetchContent: cliOptions.fetchContent
+      fetchContent: cliOptions.fetchContent,
+      excludeItemIds: []
     },
     logger
   );

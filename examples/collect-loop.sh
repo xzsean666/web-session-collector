@@ -220,7 +220,7 @@ send_slack() {
 }
 
 build_payload() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${SEEN_FILE}" <<'PY'
 import json, os, sys
 body = {"keyword": sys.argv[1]}
 for env_key, body_key in (("RECENT_DAYS", "recentDays"),
@@ -233,6 +233,17 @@ for env_key, body_key in (("RECENT_DAYS", "recentDays"),
 fc = os.environ.get("FETCH_CONTENT", "").strip().lower()
 if fc in ("1", "true", "yes", "y"):
     body["fetchContent"] = True
+# 把已采集过的 id 传给 API,让它跳过这些笔记的详情页(去重前置,省下大量重复抓取)。
+seen_file = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    exclude_max = int(os.environ.get("EXCLUDE_MAX", "500") or 500)
+except ValueError:
+    exclude_max = 500
+if seen_file and os.path.exists(seen_file):
+    with open(seen_file, encoding="utf-8") as fh:
+        ids = [ln.strip() for ln in fh if ln.strip()]
+    if ids:
+        body["excludeItemIds"] = ids[-exclude_max:] if exclude_max > 0 else ids
 print(json.dumps(body, ensure_ascii=False))
 PY
 }
@@ -283,7 +294,8 @@ run_cycle() {
       continue
     fi
 
-    ts="$(date -u +%FT%TZ)"
+    # 本地时间(带时区偏移,如 +0900);受 .env 里的 TZ 控制(对应服务器所在地)。
+    ts="$(date +%FT%T%z)"
     stat="$(printf '%s' "${body}" | python3 "${PYHELPER}" "${SEEN_FILE}" "${NOTES_FILE}" "${ts}" 2>/dev/null)"
     newc="$(printf '%s' "${stat}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('new',0))" 2>/dev/null || echo 0)"
     total_new=$(( total_new + newc ))

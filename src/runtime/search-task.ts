@@ -25,6 +25,8 @@ export interface SearchTaskOptions {
   readonly limitPerKeyword: number;
   readonly scrollCount: number;
   readonly fetchContent: boolean;
+  // 调用方已采集过的笔记 id;命中的会被提前剔除,不打开详情页、也不返回。
+  readonly excludeItemIds: readonly string[];
 }
 
 // 详情页富集之间的间隔,降低触发验证码的概率。
@@ -38,6 +40,7 @@ export interface SearchKeywordResult {
   readonly normalizedCount: number;
   readonly inRangeCount: number;
   readonly unknownDateCount: number;
+  readonly excludedKnownCount: number;
   readonly matchedItems: readonly SearchItem[];
   readonly usedFallback: boolean;
 }
@@ -213,22 +216,31 @@ async function enrichKeywordResult(
 
 export function buildSearchKeywordResult(
   result: SearchResult,
-  options: Pick<SearchTaskOptions, "recentDays" | "limitPerKeyword">
+  options: Pick<
+    SearchTaskOptions,
+    "recentDays" | "limitPerKeyword" | "excludeItemIds"
+  >
 ): SearchKeywordResult {
+  const excludeSet = new Set(options.excludeItemIds);
+  const isKnown = (item: SearchItem): boolean =>
+    item.itemId !== "" && excludeSet.has(item.itemId);
+
   const unknownDateCount = result.items.filter(
     (item) => item.ageDays === undefined
   ).length;
-  const filteredItems =
+  // recentDays === 0 表示显式「不限日期」;否则严格只保留日期可解析且在范围内的笔记。
+  // 注意:不再有「范围内为空就回退到全部」的兜底 —— 那会把超出时间范围的老帖带进来。
+  const inRangeItems =
     options.recentDays === 0
       ? result.items
       : result.items.filter(
           (item) =>
             item.ageDays !== undefined && item.ageDays <= options.recentDays
         );
-  const matchedItems =
-    filteredItems.length > 0
-      ? filteredItems
-      : result.items.slice(0, options.limitPerKeyword);
+
+  // 提前剔除调用方已采集过的笔记,避免对它们打开详情页(最贵的操作)。
+  const freshItems = inRangeItems.filter((item) => !isKnown(item));
+  const excludedKnownCount = inRangeItems.length - freshItems.length;
 
   return {
     siteKey: result.siteKey,
@@ -236,9 +248,10 @@ export function buildSearchKeywordResult(
     searchUrl: result.searchUrl,
     collectedCount: result.collectedCount,
     normalizedCount: result.items.length,
-    inRangeCount: filteredItems.length,
+    inRangeCount: inRangeItems.length,
     unknownDateCount,
-    matchedItems: matchedItems.slice(0, options.limitPerKeyword),
-    usedFallback: filteredItems.length === 0 && result.items.length > 0
+    excludedKnownCount,
+    matchedItems: freshItems.slice(0, options.limitPerKeyword),
+    usedFallback: false
   };
 }

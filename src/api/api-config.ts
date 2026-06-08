@@ -68,7 +68,7 @@ export function loadApiConfig(
     searchDefaults: {
       recentDays: parseIntegerInRange(
         parsedEnvironment.data.APP_SEARCH_RECENT_DAYS,
-        90,
+        30,
         0,
         3650,
         "APP_SEARCH_RECENT_DAYS"
