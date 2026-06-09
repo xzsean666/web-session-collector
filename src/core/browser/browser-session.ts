@@ -9,22 +9,33 @@ export interface BrowserSession {
   readonly closeMode: "context" | "disconnect";
 }
 
+export interface CreateBrowserSessionOptions {
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}
+
 export async function createBrowserSession(
   profileConfig: ProfileConfig,
   browserConfig: BrowserRuntimeConfig,
-  logger: Logger
+  logger: Logger,
+  options: CreateBrowserSessionOptions = {}
 ): Promise<BrowserSession> {
   if (browserConfig.connectionMode === "connect") {
     return connectToExistingBrowserContext(browserConfig, logger);
   }
 
-  return launchPersistentBrowserContext(profileConfig, browserConfig, logger);
+  return launchPersistentBrowserContext(
+    profileConfig,
+    browserConfig,
+    logger,
+    options
+  );
 }
 
 async function launchPersistentBrowserContext(
   profileConfig: ProfileConfig,
   browserConfig: BrowserRuntimeConfig,
-  logger: Logger
+  logger: Logger,
+  options: CreateBrowserSessionOptions
 ): Promise<BrowserSession> {
   logger.info(
     {
@@ -41,6 +52,7 @@ async function launchPersistentBrowserContext(
       timezoneId: browserConfig.timezoneId,
       viewport: browserConfig.viewport,
       deviceScaleFactor: browserConfig.deviceScaleFactor,
+      display: options.environment?.DISPLAY,
       browserFlagCount: browserConfig.flags.length,
       ignoredDefaultArgCount: browserConfig.ignoredDefaultArgs.length
     },
@@ -66,6 +78,13 @@ async function launchPersistentBrowserContext(
     hasTouch: false,
     args: browserArgs
   };
+
+  if (options.environment !== undefined) {
+    launchOptions.env = {
+      ...process.env,
+      ...options.environment
+    };
+  }
 
   if (browserConfig.ignoredDefaultArgs.length > 0) {
     launchOptions.ignoreDefaultArgs = [...browserConfig.ignoredDefaultArgs];

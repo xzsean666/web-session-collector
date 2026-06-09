@@ -9,8 +9,14 @@ services:
       - "0.0.0.0:${IDLE_NOVNC_PORT:-10087}:${IDLE_NOVNC_PORT:-10087}"
     environment:
       VNC_PASSWORD: "${VNC_PASSWORD:-}"
+      ACTIVE_DISPLAY: "${ACTIVE_DISPLAY:-:99}"
+      IDLE_DISPLAY: "${IDLE_DISPLAY:-:100}"
+      ACTIVE_VNC_PORT: "${ACTIVE_VNC_PORT:-5900}"
+      IDLE_VNC_PORT: "${IDLE_VNC_PORT:-5901}"
       ACTIVE_NOVNC_PORT: "${ACTIVE_NOVNC_PORT:-10086}"
       IDLE_NOVNC_PORT: "${IDLE_NOVNC_PORT:-10087}"
+      APP_ACTIVE_DISPLAY: "${ACTIVE_DISPLAY:-:99}"
+      APP_IDLE_DISPLAY: "${IDLE_DISPLAY:-:100}"
       APP_SITE: xiaohongshu
       APP_USER_DATA_DIR: /data/chrome-user-data
       APP_PROFILE_NAME: docker-xiaohongshu
@@ -28,6 +34,8 @@ services:
       APP_LOG_LEVEL: info
       APP_KEEP_BROWSER_ALIVE: "false"
       APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "false"
+      APP_STARTUP_SESSION_ID: "${APP_STARTUP_SESSION_ID:-default}"
+      APP_STARTUP_IDLE_SESSION_ID: "${APP_STARTUP_IDLE_SESSION_ID:-}"
       APP_BROWSER_FLAGS: '["--no-first-run","--no-default-browser-check","--disable-dev-shm-usage","--no-sandbox"]'
       APP_IGNORE_DEFAULT_ARGS: "[]"
       APP_API_HOST: 0.0.0.0

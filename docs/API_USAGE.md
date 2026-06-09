@@ -25,8 +25,12 @@ Idle/login noVNC:    http://127.0.0.1:10087/vnc.html
 - `apiActiveSessionId`: default session used by API tasks when no `sessionId`
   is provided.
 - `idleNovncSessionId`: session selected for manual login and verification.
-- Active noVNC is for observing the API-active session.
-- Idle noVNC is for manual login, captcha, and account checks.
+- Active noVNC is an isolated desktop for observing the API-active session.
+- Idle noVNC is a separate isolated desktop for manual login, captcha, and
+  account checks.
+- A session cannot occupy both active and idle desktops at the same time.
+  Activating an idle session reopens the same profile on the active desktop and
+  clears `idleNovncSessionId`.
 
 Session states:
 
@@ -116,9 +120,11 @@ Example fields for each session:
   "state": "logged_in",
   "isApiActive": true,
   "isIdleNovncTarget": true,
-  "browser": {
-    "userDataDir": "/data/chrome-user-data",
-    "ready": true
+	  "browser": {
+	    "desktopRole": "active",
+	    "display": ":99",
+	    "userDataDir": "/data/chrome-user-data",
+	    "ready": true
   },
   "page": {
     "closed": false,
@@ -144,8 +150,8 @@ Request fields:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `id` | string | No | Session id. If omitted, the server generates one. |
-| `activate` | boolean | No | Make this session the API-active session after creation. |
-| `idleNovnc` | boolean | No | Make this session the idle noVNC login target after creation. |
+| `activate` | boolean | No | Make this session the API-active session after creation. Active sessions open on the active desktop. |
+| `idleNovnc` | boolean | No | Make this session the idle noVNC login target after creation. Idle sessions open on the idle desktop. |
 
 Session ids may contain letters, numbers, `_`, and `-`, up to 64 characters.
 Additional sessions use profile data under:
@@ -162,7 +168,9 @@ Set which session API tasks use by default:
 curl -s -X POST http://100.90.168.1:10085/api/sessions/default/activate
 ```
 
-This sets `apiActiveSessionId`. It does not change `idleNovncSessionId`.
+This sets `apiActiveSessionId` and moves the session to the active noVNC
+desktop if needed. If the session was the idle noVNC target, `idleNovncSessionId`
+is cleared.
 
 ## Select Idle noVNC Login Target
 
@@ -178,7 +186,9 @@ Then open:
 http://100.90.168.1:10087/vnc.html
 ```
 
-This sets `idleNovncSessionId`. It does not change `apiActiveSessionId`.
+This sets `idleNovncSessionId` and moves the session to the idle noVNC desktop
+if needed. The API-active session cannot also be selected as the idle noVNC
+target; activate another session first.
 
 ## Update Session State
 
@@ -390,4 +400,3 @@ curl -s -X POST http://100.90.168.1:10085/api/xiaohongshu/search \
   -H "content-type: application/json" \
   -d '{"keyword":"Bitcoin crypto","scrollCount":8,"fetchContent":true}'
 ```
-

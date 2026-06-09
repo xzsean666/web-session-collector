@@ -51,12 +51,17 @@ const runtimeEnvironmentSchema = z.object({
   APP_VIEWPORT_WIDTH: z.string().optional(),
   APP_VIEWPORT_HEIGHT: z.string().optional(),
   APP_DEVICE_SCALE_FACTOR: z.string().optional(),
+  APP_ACTIVE_DISPLAY: z.string().optional(),
+  APP_IDLE_DISPLAY: z.string().optional(),
+  DISPLAY: z.string().optional(),
   APP_BROWSER_FLAGS: z.string().optional(),
   APP_IGNORE_DEFAULT_ARGS: z.string().optional(),
   APP_START_URL: z.string().optional(),
   APP_LOG_LEVEL: z.string().optional(),
   APP_KEEP_BROWSER_ALIVE: z.string().optional(),
-  APP_INTERACTIVE_LOGIN_ON_MISSING_USER: z.string().optional()
+  APP_INTERACTIVE_LOGIN_ON_MISSING_USER: z.string().optional(),
+  APP_STARTUP_SESSION_ID: z.string().optional(),
+  APP_STARTUP_IDLE_SESSION_ID: z.string().optional()
 });
 
 export class ConfigurationError extends Error {
@@ -88,6 +93,13 @@ export function loadRuntimeConfig(
   const userDataDir = validateUserDataDir(
     parsedEnvironment.data.APP_USER_DATA_DIR
   );
+
+  const activeDisplay =
+    parseOptionalNonEmptyString(parsedEnvironment.data.APP_ACTIVE_DISPLAY) ??
+    parseOptionalNonEmptyString(parsedEnvironment.data.DISPLAY);
+  const idleDisplay =
+    parseOptionalNonEmptyString(parsedEnvironment.data.APP_IDLE_DISPLAY) ??
+    activeDisplay;
 
   return {
     site: {
@@ -139,6 +151,8 @@ export function loadRuntimeConfig(
         1,
         "APP_DEVICE_SCALE_FACTOR"
       ),
+      activeDisplay,
+      idleDisplay,
       flags: parseBrowserFlags(
         parsedEnvironment.data.APP_BROWSER_FLAGS,
         "APP_BROWSER_FLAGS"
@@ -161,6 +175,13 @@ export function loadRuntimeConfig(
         parsedEnvironment.data.APP_INTERACTIVE_LOGIN_ON_MISSING_USER,
         false,
         "APP_INTERACTIVE_LOGIN_ON_MISSING_USER"
+      ),
+      startupSessionId:
+        parseOptionalNonEmptyString(
+          parsedEnvironment.data.APP_STARTUP_SESSION_ID
+        ) ?? "default",
+      startupIdleSessionId: parseOptionalNonEmptyString(
+        parsedEnvironment.data.APP_STARTUP_IDLE_SESSION_ID
       )
     },
     logging: {

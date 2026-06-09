@@ -27,12 +27,16 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
       APP_VIEWPORT_WIDTH: "1440",
       APP_VIEWPORT_HEIGHT: "900",
       APP_DEVICE_SCALE_FACTOR: "1.25",
+      APP_ACTIVE_DISPLAY: ":99",
+      APP_IDLE_DISPLAY: ":100",
       APP_BROWSER_FLAGS: "[\"--no-first-run\"]",
       APP_IGNORE_DEFAULT_ARGS: "[\"--disable-extensions\"]",
       APP_START_URL: "https://www.xiaohongshu.com/explore",
       APP_LOG_LEVEL: "debug",
       APP_KEEP_BROWSER_ALIVE: "yes",
-      APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "true"
+      APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "true",
+      APP_STARTUP_SESSION_ID: "7656",
+      APP_STARTUP_IDLE_SESSION_ID: "0205"
     });
 
     assert.equal(runtimeConfig.site.siteKey, "xiaohongshu");
@@ -51,6 +55,8 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
       height: 900
     });
     assert.equal(runtimeConfig.browser.deviceScaleFactor, 1.25);
+    assert.equal(runtimeConfig.browser.activeDisplay, ":99");
+    assert.equal(runtimeConfig.browser.idleDisplay, ":100");
     assert.deepEqual(runtimeConfig.browser.flags, ["--no-first-run"]);
     assert.deepEqual(runtimeConfig.browser.ignoredDefaultArgs, [
       "--disable-extensions"
@@ -62,6 +68,8 @@ test("loadRuntimeConfig parses the complete MVP environment", () => {
     assert.equal(runtimeConfig.logging.level, "debug");
     assert.equal(runtimeConfig.runtime.keepBrowserAlive, true);
     assert.equal(runtimeConfig.runtime.interactiveLoginOnMissingUser, true);
+    assert.equal(runtimeConfig.runtime.startupSessionId, "7656");
+    assert.equal(runtimeConfig.runtime.startupIdleSessionId, "0205");
   } finally {
     rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -90,6 +98,8 @@ test("loadRuntimeConfig applies safe defaults", () => {
       height: 768
     });
     assert.equal(runtimeConfig.browser.deviceScaleFactor, 1);
+    assert.equal(runtimeConfig.browser.activeDisplay, undefined);
+    assert.equal(runtimeConfig.browser.idleDisplay, undefined);
     assert.deepEqual(runtimeConfig.browser.flags, []);
     assert.deepEqual(runtimeConfig.browser.ignoredDefaultArgs, []);
     assert.equal(
@@ -99,6 +109,8 @@ test("loadRuntimeConfig applies safe defaults", () => {
     assert.equal(runtimeConfig.logging.level, "info");
     assert.equal(runtimeConfig.runtime.keepBrowserAlive, false);
     assert.equal(runtimeConfig.runtime.interactiveLoginOnMissingUser, false);
+    assert.equal(runtimeConfig.runtime.startupSessionId, "default");
+    assert.equal(runtimeConfig.runtime.startupIdleSessionId, undefined);
   } finally {
     rmSync(userDataDir, { recursive: true, force: true });
   }

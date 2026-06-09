@@ -143,9 +143,10 @@ noVNC ports:
   `IDLE_NOVNC_PORT` for manual login, captcha handling, and account
   verification.
 
-Changing one pointer must not implicitly change the other. They may point to the
-same session, but that is an explicit state, not an architectural requirement.
-This lets operators keep idle noVNC on a session that needs login while the API
+Changing one pointer must not implicitly change the other. A browser session
+cannot occupy both isolated desktops at the same time, so the API-active session
+and idle noVNC target must be different sessions. This lets operators keep idle
+noVNC on a session that needs login while the API
 keeps using a different already-ready session.
 
 API responses that expose session manager status should include both ids so a
@@ -309,9 +310,10 @@ POST   /api/sessions/:sessionId/idle-novnc
 PATCH  /api/sessions/:sessionId/state
 ```
 
-`POST /api/sessions/:sessionId/activate` sets `apiActiveSessionId`.
-`POST /api/sessions/:sessionId/idle-novnc` sets `idleNovncSessionId` and makes
-idle noVNC show that session for manual login.
+`POST /api/sessions/:sessionId/activate` sets `apiActiveSessionId` and moves the
+session to the active desktop if needed.
+`POST /api/sessions/:sessionId/idle-novnc` sets `idleNovncSessionId` and moves
+the session to the idle desktop if needed.
 
 Existing task routes continue to work against the API-active session unless an
 explicit session-scoped variant is added:

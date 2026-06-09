@@ -44,6 +44,8 @@ export interface BrowserRuntimeConfig {
     readonly height: number;
   };
   readonly deviceScaleFactor: number;
+  readonly activeDisplay: string | undefined;
+  readonly idleDisplay: string | undefined;
   readonly flags: readonly string[];
   readonly ignoredDefaultArgs: readonly string[];
 }
@@ -51,6 +53,8 @@ export interface BrowserRuntimeConfig {
 export interface RuntimeBehaviorConfig {
   readonly keepBrowserAlive: boolean;
   readonly interactiveLoginOnMissingUser: boolean;
+  readonly startupSessionId: string;
+  readonly startupIdleSessionId: string | undefined;
 }
 
 export interface NavigationConfig {

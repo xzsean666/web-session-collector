@@ -38,6 +38,7 @@ export type BackgroundServiceLifecycle =
 
 export type BackgroundTaskType = "search";
 export type BackgroundTaskState = "running" | "completed" | "failed";
+export type WebSessionDesktopRole = "active" | "idle";
 
 export interface BackgroundTaskSnapshot {
   readonly id: string;
@@ -64,6 +65,8 @@ export interface WebSessionSnapshot {
     readonly headless: boolean;
     readonly channel: string;
     readonly executablePath: string | undefined;
+    readonly desktopRole: WebSessionDesktopRole;
+    readonly display: string | undefined;
     readonly userDataDir: string;
     readonly profileName: string;
     readonly profileDirectory: string | undefined;
@@ -178,6 +181,7 @@ interface ManagedWebSession {
   profile: ProfileConfig;
   browserSession: BrowserSession | undefined;
   pageSession: PageSession | undefined;
+  desktopRole: WebSessionDesktopRole;
   createdAt: string;
   updatedAt: string;
   stateUpdatedAt: string | undefined;
@@ -199,6 +203,8 @@ export class BackgroundBrowserService {
   private readonly runtimeSiteAdapter: RuntimeSiteAdapter;
   private readonly accountCheckIntervalMs: number;
   private readonly logger: Logger;
+  private readonly activeDisplay: string | undefined;
+  private readonly idleDisplay: string | undefined;
   private readonly sessions = new Map<string, ManagedWebSession>();
   private lifecycle: BackgroundServiceLifecycle = "created";
   private startedAt: string | undefined;
@@ -215,6 +221,10 @@ export class BackgroundBrowserService {
     );
     this.accountCheckIntervalMs = options.accountCheckIntervalMs;
     this.logger = options.logger;
+    this.activeDisplay = options.runtimeConfig.browser.activeDisplay;
+    this.idleDisplay =
+      options.runtimeConfig.browser.idleDisplay ??
+      options.runtimeConfig.browser.activeDisplay;
   }
 
   async start(): Promise<void> {
@@ -228,12 +238,39 @@ export class BackgroundBrowserService {
     this.lastError = undefined;
 
     try {
+      const startupSessionId = this.runtimeConfig.runtime.startupSessionId;
+      const startupIdleSessionId =
+        this.runtimeConfig.runtime.startupIdleSessionId;
+
       await this.createSessionInternal({
-        id: DEFAULT_SESSION_ID,
+        id: startupSessionId,
         activate: true,
-        idleNovnc: true,
-        useBaseProfile: true
+        idleNovnc: false,
+        useBaseProfile: startupSessionId === DEFAULT_SESSION_ID
       });
+
+      if (
+        startupIdleSessionId !== undefined &&
+        startupIdleSessionId !== startupSessionId
+      ) {
+        await this.createSessionInternal({
+          id: startupIdleSessionId,
+          activate: false,
+          idleNovnc: true,
+          useBaseProfile: false
+        });
+      }
+
+      if (startupIdleSessionId === startupSessionId) {
+        this.logger.warn(
+          {
+            module: "background_service",
+            stage: "startup_idle_session_skipped",
+            sessionId: startupIdleSessionId
+          },
+          "Startup idle session matches active session and was skipped."
+        );
+      }
 
       this.lifecycle = "running";
       this.startMonitor();
@@ -355,7 +392,17 @@ export class BackgroundBrowserService {
       return this.sessionNotFoundResult(sessionId);
     }
 
+    const busyResult = await this.rejectDesktopMoveWhenBusy(session);
+
+    if (busyResult !== undefined) {
+      return busyResult;
+    }
+
+    await this.moveSessionToDesktopRole(session, "active", "session_activated");
     this.apiActiveSessionId = sessionId;
+    if (this.idleNovncSessionId === sessionId) {
+      this.idleNovncSessionId = undefined;
+    }
     session.updatedAt = new Date().toISOString();
     await this.bringSessionToFront(session);
 
@@ -375,6 +422,25 @@ export class BackgroundBrowserService {
       return this.sessionNotFoundResult(sessionId);
     }
 
+    if (this.apiActiveSessionId === sessionId) {
+      return {
+        accepted: false,
+        statusCode: 409,
+        code: "session_is_api_active",
+        message:
+          "The API-active session cannot also be the idle noVNC login target. Activate another session first.",
+        session: await this.snapshotSession(session),
+        status: await this.getStatus()
+      };
+    }
+
+    const busyResult = await this.rejectDesktopMoveWhenBusy(session);
+
+    if (busyResult !== undefined) {
+      return busyResult;
+    }
+
+    await this.moveSessionToDesktopRole(session, "idle", "idle_novnc_selected");
     this.idleNovncSessionId = sessionId;
     session.updatedAt = new Date().toISOString();
     await this.bringSessionToFront(session);
@@ -649,11 +715,13 @@ export class BackgroundBrowserService {
     mkdirSync(profile.userDataDir, { recursive: true });
 
     const createdAt = new Date().toISOString();
+    const desktopRole = this.resolveInitialDesktopRole(options);
     const session: ManagedWebSession = {
       id: sessionId,
       profile,
       browserSession: undefined,
       pageSession: undefined,
+      desktopRole,
       createdAt,
       updatedAt: createdAt,
       stateUpdatedAt: undefined,
@@ -671,40 +739,13 @@ export class BackgroundBrowserService {
     this.sessions.set(sessionId, session);
 
     try {
-      session.browserSession = await createBrowserSession(
-        profile,
-        this.runtimeConfig.browser,
-        this.logger
-      );
-      session.pageSession = await createPageSession(
-        session.browserSession.browserContext,
-        this.logger,
-        {
-          allowNewPage: this.runtimeConfig.browser.connectionMode !== "connect",
-          preferNewPage: false,
-          requiredExistingPageHostSuffix:
-            this.runtimeConfig.browser.connectionMode === "connect"
-              ? this.runtimeSiteAdapter.targetHostSuffix
-              : undefined
-        }
-      );
-
-      await verifyProfileAction(
-        session.pageSession,
-        profile,
-        this.logger
-      );
-      await openStartPageAction(
-        session.pageSession,
-        this.runtimeConfig.navigation,
-        this.logger
-      );
+      await this.openSessionBrowser(session);
 
       if (options.activate) {
         this.apiActiveSessionId = sessionId;
       }
 
-      if (options.idleNovnc) {
+      if (options.idleNovnc && !options.activate) {
         this.idleNovncSessionId = sessionId;
       }
 
@@ -717,6 +758,8 @@ export class BackgroundBrowserService {
           stage: "web_session_created",
           sessionId,
           userDataDir: profile.userDataDir,
+          desktopRole: session.desktopRole,
+          display: this.displayForDesktopRole(session.desktopRole),
           isApiActive: this.apiActiveSessionId === sessionId,
           isIdleNovncTarget: this.idleNovncSessionId === sessionId
         },
@@ -760,6 +803,129 @@ export class BackgroundBrowserService {
         sessionId
       )
     };
+  }
+
+  private resolveInitialDesktopRole(options: {
+    readonly activate: boolean;
+    readonly idleNovnc: boolean;
+  }): WebSessionDesktopRole {
+    return options.activate ? "active" : "idle";
+  }
+
+  private displayForDesktopRole(
+    desktopRole: WebSessionDesktopRole
+  ): string | undefined {
+    return desktopRole === "active" ? this.activeDisplay : this.idleDisplay;
+  }
+
+  private launchEnvironmentForDesktopRole(
+    desktopRole: WebSessionDesktopRole
+  ): Readonly<Record<string, string | undefined>> | undefined {
+    const display = this.displayForDesktopRole(desktopRole);
+
+    if (display === undefined) {
+      return undefined;
+    }
+
+    return {
+      DISPLAY: display
+    };
+  }
+
+  private async openSessionBrowser(session: ManagedWebSession): Promise<void> {
+    session.browserSession = await createBrowserSession(
+      session.profile,
+      this.runtimeConfig.browser,
+      this.logger,
+      {
+        environment: this.launchEnvironmentForDesktopRole(session.desktopRole)
+      }
+    );
+    session.pageSession = await createPageSession(
+      session.browserSession.browserContext,
+      this.logger,
+      {
+        allowNewPage: this.runtimeConfig.browser.connectionMode !== "connect",
+        preferNewPage: false,
+        requiredExistingPageHostSuffix:
+          this.runtimeConfig.browser.connectionMode === "connect"
+            ? this.runtimeSiteAdapter.targetHostSuffix
+            : undefined
+      }
+    );
+
+    await verifyProfileAction(session.pageSession, session.profile, this.logger);
+    await openStartPageAction(
+      session.pageSession,
+      this.runtimeConfig.navigation,
+      this.logger
+    );
+  }
+
+  private async rejectDesktopMoveWhenBusy(
+    session: ManagedWebSession
+  ): Promise<WebSessionOperationResult | undefined> {
+    if (session.activeTask === undefined && !session.monitorRunning) {
+      return undefined;
+    }
+
+    return {
+      accepted: false,
+      statusCode: 409,
+      code: "session_busy",
+      message: "Session is busy.",
+      session: await this.snapshotSession(session),
+      status: await this.getStatus()
+    };
+  }
+
+  private async moveSessionToDesktopRole(
+    session: ManagedWebSession,
+    desktopRole: WebSessionDesktopRole,
+    reason: string
+  ): Promise<void> {
+    if (
+      session.desktopRole === desktopRole &&
+      session.browserSession !== undefined &&
+      session.pageSession !== undefined &&
+      !session.pageSession.page.isClosed()
+    ) {
+      return;
+    }
+
+    this.logger.info(
+      {
+        module: "background_service",
+        stage: "session_desktop_move_started",
+        reason,
+        sessionId: session.id,
+        fromDesktopRole: session.desktopRole,
+        fromDisplay: this.displayForDesktopRole(session.desktopRole),
+        toDesktopRole: desktopRole,
+        toDisplay: this.displayForDesktopRole(desktopRole)
+      },
+      "Moving web session to desktop."
+    );
+
+    await this.closeSessionBrowserResources(session, reason);
+    session.pageSession = undefined;
+    session.browserSession = undefined;
+    session.desktopRole = desktopRole;
+
+    await this.openSessionBrowser(session);
+    await this.refreshSessionStatus(session, reason);
+
+    this.logger.info(
+      {
+        module: "background_service",
+        stage: "session_desktop_move_completed",
+        reason,
+        sessionId: session.id,
+        desktopRole,
+        display: this.displayForDesktopRole(desktopRole)
+      },
+      "Web session moved to desktop."
+    );
   }
 
   private normalizeSessionId(sessionId: string): string {
@@ -1156,37 +1322,7 @@ export class BackgroundBrowserService {
       "Web session shutdown started."
     );
 
-    if (session.pageSession !== undefined) {
-      await closePageSession(session.pageSession, this.logger).catch(
-        (error: unknown) => {
-          this.logger.warn(
-            {
-              module: "background_service",
-              stage: "page_close_failed",
-              sessionId: session.id,
-              error: serializeError(error)
-            },
-            "Failed to close page session during shutdown."
-          );
-        }
-      );
-    }
-
-    if (session.browserSession !== undefined) {
-      await closeBrowserSession(session.browserSession, this.logger).catch(
-        (error: unknown) => {
-          this.logger.warn(
-            {
-              module: "background_service",
-              stage: "browser_close_failed",
-              sessionId: session.id,
-              error: serializeError(error)
-            },
-            "Failed to close browser session during shutdown."
-          );
-        }
-      );
-    }
+    await this.closeSessionBrowserResources(session, reason);
 
     session.pageSession = undefined;
     session.browserSession = undefined;
@@ -1208,6 +1344,45 @@ export class BackgroundBrowserService {
     );
   }
 
+  private async closeSessionBrowserResources(
+    session: ManagedWebSession,
+    reason: string
+  ): Promise<void> {
+    if (session.pageSession !== undefined) {
+      await closePageSession(session.pageSession, this.logger).catch(
+        (error: unknown) => {
+          this.logger.warn(
+            {
+              module: "background_service",
+              stage: "page_close_failed",
+              reason,
+              sessionId: session.id,
+              error: serializeError(error)
+            },
+            "Failed to close page session during shutdown."
+          );
+        }
+      );
+    }
+
+    if (session.browserSession !== undefined) {
+      await closeBrowserSession(session.browserSession, this.logger).catch(
+        (error: unknown) => {
+          this.logger.warn(
+            {
+              module: "background_service",
+              stage: "browser_close_failed",
+              reason,
+              sessionId: session.id,
+              error: serializeError(error)
+            },
+            "Failed to close browser session during shutdown."
+          );
+        }
+      );
+    }
+  }
+
   private async snapshotSession(
     session: ManagedWebSession
   ): Promise<WebSessionSnapshot> {
@@ -1227,6 +1402,8 @@ export class BackgroundBrowserService {
         headless: this.runtimeConfig.browser.headless,
         channel: this.runtimeConfig.browser.channel,
         executablePath: this.runtimeConfig.browser.executablePath,
+        desktopRole: session.desktopRole,
+        display: this.displayForDesktopRole(session.desktopRole),
         userDataDir: session.profile.userDataDir,
         profileName: session.profile.profileName,
         profileDirectory: this.runtimeConfig.browser.profileDirectory,
@@ -1279,6 +1456,8 @@ export class BackgroundBrowserService {
       headless: this.runtimeConfig.browser.headless,
       channel: this.runtimeConfig.browser.channel,
       executablePath: this.runtimeConfig.browser.executablePath,
+      desktopRole: "active",
+      display: this.activeDisplay,
       userDataDir: this.runtimeConfig.profile.userDataDir,
       profileName: this.runtimeConfig.profile.profileName,
       profileDirectory: this.runtimeConfig.browser.profileDirectory,
