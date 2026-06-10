@@ -21,9 +21,11 @@ IDLE_VNC_PORT="${IDLE_VNC_PORT:-5901}"
 VNC_RESOLUTION="${VNC_RESOLUTION:-1366x768x24}"
 ACTIVE_NOVNC_PORT="${ACTIVE_NOVNC_PORT:-10086}"
 IDLE_NOVNC_PORT="${IDLE_NOVNC_PORT:-10087}"
+APP_IDLE_NOVNC_SWITCH="${APP_IDLE_NOVNC_SWITCH:-false}"
 
 export APP_ACTIVE_DISPLAY="${APP_ACTIVE_DISPLAY:-${ACTIVE_DISPLAY}}"
 export APP_IDLE_DISPLAY="${APP_IDLE_DISPLAY:-${IDLE_DISPLAY}}"
+export APP_IDLE_NOVNC_SWITCH
 export DISPLAY="${APP_ACTIVE_DISPLAY}"
 
 display_socket_number() {
@@ -73,17 +75,24 @@ start_desktop() {
   fi
 
   x11vnc "${x11vnc_args[@]}" >"/tmp/${name}-x11vnc.log" 2>&1 &
-  websockify --web=/usr/share/novnc "${novnc_port}" "127.0.0.1:${vnc_port}" >"/tmp/${name}-novnc.log" 2>&1 &
+  if [[ -n "${novnc_port}" ]]; then
+    websockify --web=/usr/share/novnc "${novnc_port}" "127.0.0.1:${vnc_port}" >"/tmp/${name}-novnc.log" 2>&1 &
+  fi
 }
 
 start_desktop active "${APP_ACTIVE_DISPLAY}" "${ACTIVE_VNC_PORT}" "${ACTIVE_NOVNC_PORT}"
 
+idle_novnc_port="${IDLE_NOVNC_PORT}"
+if [[ "${APP_IDLE_NOVNC_SWITCH}" =~ ^([Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Yy])$ ]]; then
+  idle_novnc_port=""
+fi
+
 if [[ "${APP_IDLE_DISPLAY}" == "${APP_ACTIVE_DISPLAY}" ]]; then
-  if [[ "${IDLE_NOVNC_PORT}" != "${ACTIVE_NOVNC_PORT}" ]]; then
-    websockify --web=/usr/share/novnc "${IDLE_NOVNC_PORT}" "127.0.0.1:${ACTIVE_VNC_PORT}" >/tmp/idle-novnc.log 2>&1 &
+  if [[ -n "${idle_novnc_port}" && "${idle_novnc_port}" != "${ACTIVE_NOVNC_PORT}" ]]; then
+    websockify --web=/usr/share/novnc "${idle_novnc_port}" "127.0.0.1:${ACTIVE_VNC_PORT}" >/tmp/idle-novnc.log 2>&1 &
   fi
 else
-  start_desktop idle "${APP_IDLE_DISPLAY}" "${IDLE_VNC_PORT}" "${IDLE_NOVNC_PORT}"
+  start_desktop idle "${APP_IDLE_DISPLAY}" "${IDLE_VNC_PORT}" "${idle_novnc_port}"
 fi
 
 exec "$@"

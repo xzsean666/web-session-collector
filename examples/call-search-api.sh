@@ -14,12 +14,18 @@
 #   LIMIT            每个关键词最多返回多少条
 #   SCROLL_COUNT     搜索结果页向下滚动加载的次数(越大抓得越多、越慢)
 #   FAILOVER         active session 失效时是否自动切换到可用备用 session,默认 1
+#   SESSION_RESTART  failover 前是否先重启当前 session 浏览器尝试恢复,默认 1
+#   SLACK_WEBHOOK_URL 恢复失败时发送 Slack 报告;未设置则不发
 #
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://100.90.168.1:10085}"
 IDLE_NOVNC_URL="${IDLE_NOVNC_URL:-http://100.90.168.1:10087/vnc.html}"
 FAILOVER="${FAILOVER:-1}"
+SESSION_RESTART="${SESSION_RESTART:-1}"
+SESSION_RESTART_WAIT="${SESSION_RESTART_WAIT:-5}"
+SESSION_RECOVERY_RETRIES="${SESSION_RECOVERY_RETRIES:-1}"
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 
 if [[ $# -lt 1 ]]; then
   echo "用法: $0 <关键词> [更多关键词...]" >&2
@@ -41,8 +47,26 @@ read_session_state_from_check() {
     2>/dev/null || echo unknown
 }
 
+send_slack() {
+  local msg="$1"
+  if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+    return 0
+  fi
+
+  local payload
+  payload="$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}, ensure_ascii=False))' "${msg}")"
+  curl -fsS -m 15 -X POST -H "Content-Type: application/json" \
+    -d "${payload}" "${SLACK_WEBHOOK_URL}" >/dev/null 2>&1 || true
+}
+
 refresh_session_state() {
   curl -fsS -m 30 -X POST "${BASE_URL}/api/session/check" \
+    | read_session_state_from_check
+}
+
+session_state_for() {
+  local session_id="$1"
+  curl -fsS -m 30 -X POST "${BASE_URL}/api/session/check?sessionId=${session_id}" \
     | read_session_state_from_check
 }
 
@@ -59,7 +83,7 @@ is_blocking_session_state() {
 
 is_failover_http_status() {
   case "$1" in
-    423|428|503)
+    000|423|428|500|502|503|504)
       return 0
       ;;
     *)
@@ -98,6 +122,44 @@ for session in data.get("sessions") or []:
 ' 2>/dev/null || true
 }
 
+list_restartable_fallback_sessions() {
+  curl -fsS -m 10 "${BASE_URL}/api/sessions" | python3 -c '
+import json, sys
+
+data = json.load(sys.stdin)
+for session in data.get("sessions") or []:
+    if session.get("isApiActive"):
+        continue
+    if session.get("activeTask") is not None:
+        continue
+    if (session.get("monitor") or {}).get("running"):
+        continue
+    session_id = str(session.get("id") or "").strip()
+    if session_id:
+        print(session_id)
+' 2>/dev/null || true
+}
+
+find_recovered_fallback_session() {
+  local session_id
+
+  case "${SESSION_RESTART}" in
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+  esac
+
+  while IFS= read -r session_id; do
+    [[ -z "${session_id}" ]] && continue
+    if restart_session_browser "${session_id}" "fallback_recovery" >&2; then
+      printf '%s\n' "${session_id}"
+      return 0
+    fi
+  done < <(list_restartable_fallback_sessions)
+
+  return 1
+}
+
 activate_fallback_session() {
   local current_state="$1"
   local failed_session_id="${2:-}"
@@ -115,6 +177,9 @@ activate_fallback_session() {
   fi
 
   fallback_session_id="$(find_ready_fallback_session)"
+  if [[ -z "${fallback_session_id}" ]]; then
+    fallback_session_id="$(find_recovered_fallback_session)"
+  fi
 
   if [[ -z "${fallback_session_id}" ]]; then
     return 1
@@ -137,6 +202,61 @@ activate_fallback_session() {
   fi
 
   echo "    备用 session 激活失败: ${fallback_session_id}" >&2
+  return 1
+}
+
+restart_session_browser() {
+  local session_id="$1"
+  local reason="${2:-session_recovery}"
+  local state
+
+  case "${SESSION_RESTART}" in
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+  esac
+
+  if [[ -z "${session_id}" ]]; then
+    return 1
+  fi
+
+  echo "==> active session ${session_id} state=${reason},先重启浏览器尝试恢复"
+  if ! curl -fsS -m 120 -X POST "${BASE_URL}/api/sessions/${session_id}/restart" >/dev/null; then
+    echo "    session 浏览器重启失败: ${session_id}" >&2
+    return 1
+  fi
+
+  sleep "${SESSION_RESTART_WAIT}"
+  state="$(session_state_for "${session_id}")"
+  echo "    重启后 session.state = ${state}"
+  [[ "${state}" == "logged_in" ]]
+}
+
+recover_active_session() {
+  local current_state="$1"
+  local failed_session_id="${2:-}"
+  local attempt
+
+  if [[ -z "${failed_session_id}" ]]; then
+    failed_session_id="$(current_active_session_id)"
+  fi
+
+  for attempt in $(seq 1 "${SESSION_RECOVERY_RETRIES}"); do
+    if restart_session_browser "${failed_session_id}" "${current_state}"; then
+      echo "    session 已通过浏览器重启恢复: ${failed_session_id}"
+      return 0
+    fi
+  done
+
+  if activate_fallback_session "${current_state}" "${failed_session_id}"; then
+    return 0
+  fi
+
+  send_slack "$(printf '🔴 采集 session 恢复失败\nactive session: %s\nstate: %s\n已尝试: 重启浏览器%s 次 + 切换备用 session\n结果: 没有可用备用 session 或切换失败\nidle noVNC: %s' \
+    "${failed_session_id:-unknown}" \
+    "${current_state}" \
+    "${SESSION_RECOVERY_RETRIES}" \
+    "${IDLE_NOVNC_URL}")"
   return 1
 }
 
@@ -165,7 +285,7 @@ if [[ "${state}" != "logged_in" ]]; then
 fi
 
 if is_blocking_session_state "${state}"; then
-  if activate_fallback_session "${state}" "${active_session_id}"; then
+  if recover_active_session "${state}" "${active_session_id}"; then
     state="$(refresh_session_state)"
     active_session_id="$(current_active_session_id)"
     echo "session.state = ${state}"
@@ -173,6 +293,7 @@ if is_blocking_session_state "${state}"; then
 fi
 
 if [[ "${state}" != "logged_in" ]]; then
+  send_slack "🟠 采集跳过:账号未登录(${state}),自动恢复失败。idle noVNC: ${IDLE_NOVNC_URL}"
   echo "⚠️  账号未登录(${state})。请先打开 idle noVNC 人工登录后再搜索。" >&2
   exit 2
 fi
@@ -216,7 +337,7 @@ body="${resp%$'\n'*}"
 
 if [[ "${code}" != "200" ]] && is_failover_http_status "${code}"; then
   active_session_id="$(current_active_session_id)"
-  if activate_fallback_session "search_http_${code}" "${active_session_id}"; then
+  if recover_active_session "search_http_${code}" "${active_session_id}"; then
     active_session_id="$(current_active_session_id)"
     resp="$(curl -s -m 300 -w $'\n%{http_code}' -X POST \
       "${BASE_URL}/api/xiaohongshu/search" \
@@ -228,6 +349,7 @@ if [[ "${code}" != "200" ]] && is_failover_http_status "${code}"; then
 fi
 
 if [[ "${code}" != "200" ]]; then
+  send_slack "$(printf '🔴 搜索失败\nHTTP: %s\nactive session: %s\n响应:\n%s' "${code}" "$(current_active_session_id)" "${body}")"
   echo "搜索失败: HTTP ${code}" >&2
   printf '%s\n' "${body}" >&2
   exit 3

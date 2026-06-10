@@ -10,10 +10,15 @@ import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { listSearchSiteKeys } from "../sites/site-registry.js";
 import {
   BackgroundBrowserService,
+  type BackgroundServiceStatus,
   type WebSessionOperationResult
 } from "../runtime/background-browser-service.js";
 import type { SessionState } from "../core/types/session-monitor.js";
 import { loadApiConfig, type ApiConfig } from "./api-config.js";
+import {
+  IdleNoVncController,
+  type IdleNoVncTargetRole
+} from "./idle-novnc-controller.js";
 
 const searchRequestSchema = z
   .object({
@@ -75,6 +80,18 @@ async function main(): Promise<void> {
   const runtimeConfig = loadRuntimeConfig(process.env);
   const apiConfig = loadApiConfig(process.env);
   const logger = createLogger(runtimeConfig.logging);
+  const idleVncPort =
+    runtimeConfig.browser.idleDisplay === runtimeConfig.browser.activeDisplay
+      ? apiConfig.activeVncPort
+      : apiConfig.idleVncPort;
+  const idleNoVncController = apiConfig.idleNoVncSwitchEnabled
+    ? new IdleNoVncController({
+        noVncPort: apiConfig.idleNoVncPort,
+        activeVncPort: apiConfig.activeVncPort,
+        idleVncPort,
+        logger
+      })
+    : undefined;
   const browserService = new BackgroundBrowserService({
     runtimeConfig,
     accountCheckIntervalMs: apiConfig.accountCheckIntervalMs,
@@ -82,11 +99,17 @@ async function main(): Promise<void> {
   });
 
   await browserService.start();
+  await syncIdleNoVncController(
+    idleNoVncController,
+    await browserService.getStatus(),
+    "startup"
+  );
 
   const server = http.createServer((request, response) => {
     void handleRequest(request, response, {
       apiConfig,
       browserService,
+      idleNoVncController,
       logger
     }).catch((error: unknown) => {
       logger.error(
@@ -109,24 +132,40 @@ async function main(): Promise<void> {
     });
   });
 
-  await listen(server, apiConfig);
+  try {
+    await listen(server, apiConfig.port, apiConfig.host);
+  } catch (error) {
+    server.close();
+    await idleNoVncController?.stop("api_listen_failed");
+    throw error;
+  }
 
   logger.info(
     {
       module: "api",
       stage: "listening",
       host: apiConfig.host,
-      port: apiConfig.port
+      port: apiConfig.port,
+      idleNoVncSwitchEnabled: apiConfig.idleNoVncSwitchEnabled,
+      idleNoVncPort: apiConfig.idleNoVncPort,
+      activeVncPort: apiConfig.activeVncPort,
+      idleVncPort
     },
     "API service is listening."
   );
 
-  installShutdownHandlers(server, browserService, logger);
+  installShutdownHandlers(
+    server,
+    browserService,
+    idleNoVncController,
+    logger
+  );
 }
 
 interface RequestContext {
   readonly apiConfig: ApiConfig;
   readonly browserService: BackgroundBrowserService;
+  readonly idleNoVncController: IdleNoVncController | undefined;
   readonly logger: ReturnType<typeof createLogger>;
 }
 
@@ -245,7 +284,7 @@ async function handleRequest(
 
 interface SessionRoute {
   readonly sessionId: string;
-  readonly action: "delete" | "activate" | "idle-novnc" | "state";
+  readonly action: "delete" | "activate" | "idle-novnc" | "restart" | "state";
 }
 
 function matchSessionRoute(pathname: string): SessionRoute | undefined {
@@ -268,6 +307,7 @@ function matchSessionRoute(pathname: string): SessionRoute | undefined {
   if (
     rawAction === "activate" ||
     rawAction === "idle-novnc" ||
+    rawAction === "restart" ||
     rawAction === "state"
   ) {
     return {
@@ -312,6 +352,12 @@ async function handleCreateSession(
     return;
   }
 
+  await syncIdleNoVncController(
+    context.idleNoVncController,
+    createResult.status,
+    "session_created"
+  );
+
   writeJson(response, 201, {
     ok: true,
     session: createResult.session,
@@ -332,6 +378,7 @@ async function handleSessionRoute(
     }
 
     const deleteResult = await context.browserService.deleteSession(route.sessionId);
+    await syncSessionOperationIdleNoVnc(context, deleteResult, "session_deleted");
     writeSessionOperationResult(response, deleteResult, deleteResult.accepted ? 200 : undefined);
     return;
   }
@@ -343,6 +390,7 @@ async function handleSessionRoute(
     }
 
     const activateResult = await context.browserService.activateSession(route.sessionId);
+    await syncSessionOperationIdleNoVnc(context, activateResult, "session_activated");
     writeSessionOperationResult(response, activateResult);
     return;
   }
@@ -356,7 +404,20 @@ async function handleSessionRoute(
     const idleNovncResult = await context.browserService.setIdleNovncSession(
       route.sessionId
     );
+    await syncSessionOperationIdleNoVnc(context, idleNovncResult, "idle_novnc_selected");
     writeSessionOperationResult(response, idleNovncResult);
+    return;
+  }
+
+  if (route.action === "restart") {
+    if (request.method !== "POST") {
+      writeMethodNotAllowed(response);
+      return;
+    }
+
+    const restartResult = await context.browserService.restartSession(route.sessionId);
+    await syncSessionOperationIdleNoVnc(context, restartResult, "session_restarted");
+    writeSessionOperationResult(response, restartResult);
     return;
   }
 
@@ -562,6 +623,43 @@ function noVncStatus(apiConfig: ApiConfig): {
   };
 }
 
+async function syncSessionOperationIdleNoVnc(
+  context: RequestContext,
+  result: WebSessionOperationResult,
+  reason: string
+): Promise<void> {
+  if (!result.accepted) {
+    return;
+  }
+
+  await syncIdleNoVncController(
+    context.idleNoVncController,
+    result.status,
+    reason
+  );
+}
+
+async function syncIdleNoVncController(
+  controller: IdleNoVncController | undefined,
+  status: BackgroundServiceStatus,
+  reason: string
+): Promise<void> {
+  if (controller === undefined) {
+    return;
+  }
+
+  await controller.setTargetRole(resolveIdleNoVncTargetRole(status), reason);
+}
+
+function resolveIdleNoVncTargetRole(
+  status: BackgroundServiceStatus
+): IdleNoVncTargetRole {
+  return status.idleNovncSessionId !== undefined &&
+    status.idleNovncSessionId === status.apiActiveSessionId
+    ? "active"
+    : "idle";
+}
+
 function normalizeKeywords(
   data: z.infer<typeof searchRequestSchema>
 ): readonly string[] {
@@ -723,10 +821,10 @@ function writeEmpty(response: ServerResponse, statusCode: number): void {
   response.end();
 }
 
-function listen(server: Server, apiConfig: ApiConfig): Promise<void> {
+function listen(server: Server, port: number, host: string): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(apiConfig.port, apiConfig.host, () => {
+    server.listen(port, host, () => {
       server.off("error", reject);
       resolve();
     });
@@ -736,6 +834,7 @@ function listen(server: Server, apiConfig: ApiConfig): Promise<void> {
 function installShutdownHandlers(
   server: Server,
   browserService: BackgroundBrowserService,
+  idleNoVncController: IdleNoVncController | undefined,
   logger: ReturnType<typeof createLogger>
 ): void {
   let shutdownStarted = false;
@@ -768,6 +867,7 @@ function installShutdownHandlers(
           );
         }
 
+        await idleNoVncController?.stop(signal);
         await browserService.stop(signal);
         logger.info(
           {

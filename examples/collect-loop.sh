@@ -24,6 +24,8 @@
 #   RECENT_DAYS / LIMIT / SCROLL_COUNT  覆盖搜索参数(留空则用服务端默认值)
 #   BUSY_RETRIES / BUSY_WAIT  遇到 409 任务忙时的重试次数 / 间隔秒数 (默认 10 / 15)
 #   FAILOVER          active session 失效时是否自动切换到可用备用 session (默认 1)
+#   SESSION_RESTART   failover 前是否先重启当前 session 浏览器尝试恢复 (默认 1)
+#   SESSION_RECOVERY_RETRIES / SESSION_RESTART_WAIT  重启恢复次数 / 重启后等待秒数 (默认 1 / 5)
 #
 set -uo pipefail
 
@@ -53,6 +55,9 @@ SCROLL_COUNT="${SCROLL_COUNT:-}"
 BUSY_RETRIES="${BUSY_RETRIES:-10}"
 BUSY_WAIT="${BUSY_WAIT:-15}"
 FAILOVER="${FAILOVER:-1}"
+SESSION_RESTART="${SESSION_RESTART:-1}"
+SESSION_RECOVERY_RETRIES="${SESSION_RECOVERY_RETRIES:-1}"
+SESSION_RESTART_WAIT="${SESSION_RESTART_WAIT:-5}"
 
 NOTES_FILE="${DATA_DIR}/notes.jsonl"
 SEEN_FILE="${DATA_DIR}/seen_ids.txt"
@@ -283,7 +288,7 @@ if not bad_sessions and not active_bad_sessions:
 
 print("Session: 发现需要重新登录/处理的 session。")
 if active_bad_sessions:
-    print("当前 active 里也有失效 session;需要先切到可用备用 session,再把它放到 idle noVNC。")
+    print("当前 active 里也有失效 session;可以直接把它显示到 idle noVNC,10087 会镜像 active。")
 
 for session_id, state in bad_sessions:
     print(f"- {session_id} ({state})")
@@ -294,7 +299,7 @@ for session_id, state in bad_sessions:
 
 for session_id, state in active_bad_sessions:
     print(f"- {session_id} ({state}, active)")
-    print("  登录命令: 先激活一个 logged_in 备用 session,再执行:")
+    print("  登录命令:")
     print(f"  curl -s -X POST \"{base_url}/api/sessions/{session_id}/idle-novnc\"")
     print("  检查命令:")
     print(f"  curl -s -X POST \"{base_url}/api/session/check?sessionId={session_id}\"")
@@ -324,6 +329,12 @@ refresh_session_state() {
     | read_session_state_from_check
 }
 
+session_state_for() {
+  local session_id="$1"
+  curl -fsS -m 30 -X POST "${BASE_URL}/api/session/check?sessionId=${session_id}" 2>/dev/null \
+    | read_session_state_from_check
+}
+
 is_blocking_session_state() {
   case "$1" in
     logged_out|challenge_required|browser_closed|error)
@@ -337,7 +348,7 @@ is_blocking_session_state() {
 
 is_failover_http_status() {
   case "$1" in
-    423|428|503)
+    000|423|428|500|502|503|504)
       return 0
       ;;
     *)
@@ -376,6 +387,44 @@ for session in data.get("sessions") or []:
 ' 2>/dev/null || true
 }
 
+list_restartable_fallback_sessions() {
+  curl -fsS -m 10 "${BASE_URL}/api/sessions" | python3 -c '
+import json, sys
+
+data = json.load(sys.stdin)
+for session in data.get("sessions") or []:
+    if session.get("isApiActive"):
+        continue
+    if session.get("activeTask") is not None:
+        continue
+    if (session.get("monitor") or {}).get("running"):
+        continue
+    session_id = str(session.get("id") or "").strip()
+    if session_id:
+        print(session_id)
+' 2>/dev/null || true
+}
+
+find_recovered_fallback_session() {
+  local session_id
+
+  case "${SESSION_RESTART}" in
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+  esac
+
+  while IFS= read -r session_id; do
+    [ -z "${session_id}" ] && continue
+    if restart_session_browser "${session_id}" "fallback_recovery" >&2; then
+      printf '%s\n' "${session_id}"
+      return 0
+    fi
+  done < <(list_restartable_fallback_sessions)
+
+  return 1
+}
+
 activate_fallback_session() {
   local current_state="$1"
   local failed_session_id="${2:-}"
@@ -394,6 +443,9 @@ activate_fallback_session() {
   fi
 
   fallback_session_id="$(find_ready_fallback_session)"
+  if [ -z "${fallback_session_id}" ]; then
+    fallback_session_id="$(find_recovered_fallback_session)"
+  fi
 
   if [ -z "${fallback_session_id}" ]; then
     return 1
@@ -426,6 +478,68 @@ activate_fallback_session() {
   fi
 
   log "⚠️ 备用 session 激活失败:${fallback_session_id}"
+  return 1
+}
+
+restart_session_browser() {
+  local session_id="$1"
+  local reason="${2:-session_recovery}"
+  local state
+
+  case "${SESSION_RESTART}" in
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+  esac
+
+  if [ -z "${session_id}" ]; then
+    return 1
+  fi
+
+  log "active session ${session_id} state=${reason},先重启浏览器尝试恢复"
+  if ! curl -fsS -m 120 -X POST "${BASE_URL}/api/sessions/${session_id}/restart" >/dev/null 2>&1; then
+    log "⚠️ session 浏览器重启失败:${session_id}"
+    return 1
+  fi
+
+  sleep "${SESSION_RESTART_WAIT}"
+  state="$(session_state_for "${session_id}")"
+  log "重启后 session ${session_id} state=${state}"
+  [ "${state}" = "logged_in" ]
+}
+
+recover_active_session() {
+  local current_state="$1"
+  local failed_session_id="${2:-}"
+  local attempt
+
+  if [ -z "${failed_session_id}" ]; then
+    failed_session_id="$(current_active_session_id)"
+  fi
+
+  for attempt in $(seq 1 "${SESSION_RECOVERY_RETRIES}"); do
+    if restart_session_browser "${failed_session_id}" "${current_state}"; then
+      SESSION_FAILOVER_NOTICE="$(printf 'Session: 检测到 active session 异常,已通过重启浏览器恢复。\n恢复 session: %s\n原状态: %s\n重启次数: %s' \
+        "${failed_session_id:-unknown}" \
+        "${current_state}" \
+        "${attempt}")"
+      export WSC_SESSION_NOTICE="$(session_slack_notice)"
+      return 0
+    fi
+  done
+
+  if activate_fallback_session "${current_state}" "${failed_session_id}"; then
+    return 0
+  fi
+
+  SESSION_FAILOVER_NOTICE="$(printf 'Session: active session 自动恢复失败。\n失效 session: %s (%s)\n已尝试: 重启浏览器 %s 次 + 切换备用 session\n结果: 没有可用 logged_in 备用 session,或备用 session 激活失败。\n登录命令:\n```bash\ncurl -s -X POST "%s/api/sessions/%s/idle-novnc"\n```\n登录入口: %s' \
+    "${failed_session_id:-unknown}" \
+    "${current_state}" \
+    "${SESSION_RECOVERY_RETRIES}" \
+    "${BASE_URL}" \
+    "${failed_session_id:-unknown}" \
+    "${IDLE_NOVNC_URL}")"
+  export WSC_SESSION_NOTICE="$(session_slack_notice)"
   return 1
 }
 
@@ -484,18 +598,13 @@ run_cycle() {
   fi
 
   if is_blocking_session_state "${state}"; then
-    if activate_fallback_session "${state}" "${active_session_id}"; then
+    if recover_active_session "${state}" "${active_session_id}"; then
       state="$(refresh_session_state)"
       active_session_id="$(current_active_session_id)"
       log "切换后 active session state=${state}"
     else
-      SESSION_FAILOVER_NOTICE="$(printf 'Session: 检测到 active session 失效,但没有可用备用 session。\n失效 session: %s (%s)\n说明: 当前坏 session 仍是 API-active,无法安全切到 idle noVNC。请先准备一个 logged_in 备用 session,或直接在 active noVNC 修复当前 session。\nidle 登录入口: %s' \
-        "${active_session_id:-unknown}" \
-        "${state}" \
-        "${IDLE_NOVNC_URL}")"
-      export WSC_SESSION_NOTICE="$(session_slack_notice)"
       log "⚠️ 账号未登录(state=${state}),且没有可用备用 session,跳过本轮"
-      send_slack "🟠 采集跳过:账号未登录 (state=${state}),且没有可用备用 session。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
+      send_slack "🟠 采集跳过:账号未登录 (state=${state}),自动恢复和 failover 都失败。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
       return 1
     fi
   fi
@@ -532,9 +641,9 @@ run_cycle() {
       fi
       if is_failover_http_status "${code}"; then
         active_session_id="$(current_active_session_id)"
-        if activate_fallback_session "search_http_${code}" "${active_session_id}"; then
+        if recover_active_session "search_http_${code}" "${active_session_id}"; then
           active_session_id="$(current_active_session_id)"
-          log "  [${kw}] 已切换备用 session,重试当前关键词(${attempt}/${BUSY_RETRIES})"
+          log "  [${kw}] session 已恢复或已切换备用,重试当前关键词(${attempt}/${BUSY_RETRIES})"
           continue
         fi
       fi

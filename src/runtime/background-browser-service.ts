@@ -385,7 +385,7 @@ export class BackgroundBrowserService {
     };
   }
 
-  async activateSession(sessionId: string): Promise<WebSessionOperationResult> {
+  async restartSession(sessionId: string): Promise<WebSessionOperationResult> {
     const session = this.sessions.get(sessionId);
 
     if (session === undefined) {
@@ -398,11 +398,89 @@ export class BackgroundBrowserService {
       return busyResult;
     }
 
+    try {
+      await this.closeSessionBrowserResources(session, "session_restarted");
+      session.pageSession = undefined;
+      session.browserSession = undefined;
+
+      await this.openSessionBrowser(session);
+      await this.refreshSessionStatus(session, "session_restarted");
+      session.updatedAt = new Date().toISOString();
+      await this.bringSessionToFront(session);
+
+      this.logger.info(
+        {
+          module: "background_service",
+          stage: "web_session_restarted",
+          sessionId,
+          desktopRole: session.desktopRole,
+          display: this.displayForDesktopRole(session.desktopRole)
+        },
+        "Web session restarted."
+      );
+
+      return {
+        accepted: true,
+        session: await this.snapshotSession(session),
+        status: await this.getStatus()
+      };
+    } catch (error) {
+      session.lastError = serializeError(error);
+      session.sessionInspection = this.createSyntheticInspection(
+        session,
+        "error",
+        new Date().toISOString()
+      );
+      session.updatedAt = new Date().toISOString();
+
+      return {
+        accepted: false,
+        statusCode: 500,
+        code: "session_restart_failed",
+        message: error instanceof Error ? error.message : String(error),
+        session: await this.snapshotSession(session),
+        status: await this.getStatus()
+      };
+    }
+  }
+
+  async activateSession(sessionId: string): Promise<WebSessionOperationResult> {
+    const session = this.sessions.get(sessionId);
+
+    if (session === undefined) {
+      return this.sessionNotFoundResult(sessionId);
+    }
+
+    const idleNovncSession =
+      this.idleNovncSessionId === undefined ||
+      this.idleNovncSessionId === sessionId
+        ? undefined
+        : this.sessions.get(this.idleNovncSessionId);
+    const busyResult = await this.rejectDesktopMoveWhenBusy(session);
+
+    if (busyResult !== undefined) {
+      return busyResult;
+    }
+
+    if (idleNovncSession?.desktopRole === "active") {
+      const idleBusyResult = await this.rejectDesktopMoveWhenBusy(idleNovncSession);
+
+      if (idleBusyResult !== undefined) {
+        return idleBusyResult;
+      }
+    }
+
     await this.moveSessionToDesktopRole(session, "active", "session_activated");
     this.apiActiveSessionId = sessionId;
-    if (this.idleNovncSessionId === sessionId) {
-      this.idleNovncSessionId = undefined;
+
+    if (idleNovncSession?.desktopRole === "active") {
+      await this.moveSessionToDesktopRole(
+        idleNovncSession,
+        "idle",
+        "idle_novnc_target_preserved"
+      );
     }
+
     session.updatedAt = new Date().toISOString();
     await this.bringSessionToFront(session);
 
@@ -423,12 +501,12 @@ export class BackgroundBrowserService {
     }
 
     if (this.apiActiveSessionId === sessionId) {
+      this.idleNovncSessionId = sessionId;
+      session.updatedAt = new Date().toISOString();
+      await this.bringSessionToFront(session);
+
       return {
-        accepted: false,
-        statusCode: 409,
-        code: "session_is_api_active",
-        message:
-          "The API-active session cannot also be the idle noVNC login target. Activate another session first.",
+        accepted: true,
         session: await this.snapshotSession(session),
         status: await this.getStatus()
       };

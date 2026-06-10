@@ -5,8 +5,9 @@
 - 当前 active session 正常时,搜索请求不传 `sessionId`。
 - 备用 session 先创建出来,通过 idle noVNC 人工登录。
 - 当前 active session 失效后,外部脚本再把某个备用 session 切成 active。
-- active noVNC 和 idle noVNC 是两个独立桌面;切换 session 角色时,
-  服务会用同一个 profile 在目标桌面重开浏览器。
+- active noVNC 和 idle noVNC 默认用于两个独立桌面;但 idle noVNC 的目标
+  可以指向当前 active session。此时 10087 会镜像 10086,不会创建或移动
+  浏览器。
 
 默认 API 地址:
 
@@ -89,7 +90,14 @@ curl -s -X POST "${BASE_URL}/api/xiaohongshu/search" \
 ## 6. 当前 active session 失效时,切换到备用 session
 
 当当前 active session 变成 `logged_out`、`challenge_required`、`browser_closed`
-或 `error` 时,外部脚本可以执行:
+或 `error` 时,先尝试重启当前 session 浏览器:
+
+```bash
+curl -s -X POST "${BASE_URL}/api/sessions/7656/restart"
+curl -s -X POST "${BASE_URL}/api/session/check?sessionId=7656"
+```
+
+如果重启后仍不是 `logged_in`,外部脚本可以执行:
 
 ```bash
 curl -s -X POST "${BASE_URL}/api/sessions/account_2/activate"
@@ -97,7 +105,8 @@ curl -s -X POST "${BASE_URL}/api/sessions/account_2/activate"
 
 这会把 `account_2` 从 idle 桌面移到 active 桌面。它使用同一个
 `APP_USER_DATA_DIR/sessions/account_2` profile,所以登录态会保留。
-如果 `account_2` 原本是 `idleNovncSessionId`,切换后 idle target 会被清空。
+如果 `account_2` 原本是 `idleNovncSessionId`,切换后 10087 会继续显示
+`account_2`,并镜像 active noVNC。
 
 切换后再次确认状态:
 
@@ -156,6 +165,10 @@ curl -s -X POST "${BASE_URL}/api/xiaohongshu/search" \
 curl -s -X POST "${BASE_URL}/api/sessions/<sessionId>/idle-novnc"
 ```
 
+这个命令只要求 session 已存在,不会创建 session。如果目标 session 当前就是
+active session,10087 会镜像 active noVNC;如果目标 session 不是 active,
+服务会把它放到 idle 桌面并让 10087 显示它。
+
 登录后检查:
 
 ```bash
@@ -165,9 +178,12 @@ curl -s -X POST "${BASE_URL}/api/session/check?sessionId=<sessionId>"
 ```text
 1. POST /api/session/check 检查当前 active session
 2. state=logged_in 时继续采集
-3. state=logged_out/challenge_required/browser_closed/error 时暂停当前 active
-4. GET /api/sessions 找一个 state=logged_in 的备用 session
-5. POST /api/sessions/<备用id>/activate
-6. 如需重新登录旧 active session,POST /api/sessions/<旧active>/idle-novnc
-7. 重试采集
+3. state=logged_out/challenge_required/browser_closed/error 时先
+   POST /api/sessions/<当前active>/restart
+4. 重启后再次 POST /api/session/check
+5. 如果仍不可用,GET /api/sessions 找一个 state=logged_in 的备用 session
+6. POST /api/sessions/<备用id>/activate
+7. POST /api/sessions/<旧active>/idle-novnc,方便人工修复旧 session
+8. 如果没有备用或切换失败,发送 Slack/报警并跳过本轮
+9. 重试采集
 ```

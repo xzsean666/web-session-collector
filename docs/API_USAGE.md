@@ -25,12 +25,13 @@ Idle/login noVNC:    http://127.0.0.1:10087/vnc.html
 - `apiActiveSessionId`: default session used by API tasks when no `sessionId`
   is provided.
 - `idleNovncSessionId`: session selected for manual login and verification.
-- Active noVNC is an isolated desktop for observing the API-active session.
-- Idle noVNC is a separate isolated desktop for manual login, captcha, and
-  account checks.
-- A session cannot occupy both active and idle desktops at the same time.
-  Activating an idle session reopens the same profile on the active desktop and
-  clears `idleNovncSessionId`.
+- Active noVNC observes the API-active session.
+- Idle noVNC shows `idleNovncSessionId` for manual login, captcha, and account
+  checks.
+- If `idleNovncSessionId` is also the API-active session, idle noVNC mirrors
+  active noVNC instead of moving or reopening the browser.
+- If `idleNovncSessionId` is not the API-active session, the target session runs
+  on the idle desktop.
 
 Session states:
 
@@ -53,7 +54,8 @@ error
 | `POST` | `/api/sessions` | Create a web session |
 | `DELETE` | `/api/sessions/:sessionId` | Delete a web session |
 | `POST` | `/api/sessions/:sessionId/activate` | Set the API-active session |
-| `POST` | `/api/sessions/:sessionId/idle-novnc` | Set the idle noVNC login target |
+| `POST` | `/api/sessions/:sessionId/idle-novnc` | Show the session on idle noVNC |
+| `POST` | `/api/sessions/:sessionId/restart` | Restart one session browser with the same profile and desktop role |
 | `PATCH` | `/api/sessions/:sessionId/state` | Manually set session state |
 | `GET` | `/api/sites/search` | List supported search sites |
 | `POST` | `/api/session/check` | Inspect login/session state |

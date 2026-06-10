@@ -123,6 +123,7 @@ API service configuration:
 | `APP_ACCOUNT_CHECK_INTERVAL_MS` | No | Idle session monitor interval, defaults to `60000`; `0` disables scheduled checks |
 | `ACTIVE_NOVNC_PORT` | No | noVNC port for observing the API-active session, defaults to `10086` |
 | `IDLE_NOVNC_PORT` | No | noVNC port for manual login on idle/login-target sessions, defaults to `10087` |
+| `APP_IDLE_NOVNC_SWITCH` | No | Lets the API restart `IDLE_NOVNC_PORT` so it can point at the active or idle VNC server; Docker enables this by default |
 | `ACTIVE_DISPLAY` / `APP_ACTIVE_DISPLAY` | No | X display used by API-active browser sessions in Docker, defaults to `:99` |
 | `IDLE_DISPLAY` / `APP_IDLE_DISPLAY` | No | X display used by idle/login browser sessions in Docker, defaults to `:100` |
 | `ACTIVE_VNC_PORT` | No | Internal VNC port for the active desktop, defaults to `5900` |
