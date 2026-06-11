@@ -56,6 +56,8 @@ const runtimeEnvironmentSchema = z.object({
   DISPLAY: z.string().optional(),
   APP_BROWSER_FLAGS: z.string().optional(),
   APP_IGNORE_DEFAULT_ARGS: z.string().optional(),
+  APP_HUMANIZE: z.string().optional(),
+  APP_UA_SPOOF: z.string().optional(),
   APP_START_URL: z.string().optional(),
   APP_LOG_LEVEL: z.string().optional(),
   APP_KEEP_BROWSER_ALIVE: z.string().optional(),
@@ -160,6 +162,16 @@ export function loadRuntimeConfig(
       ignoredDefaultArgs: parseBrowserFlags(
         parsedEnvironment.data.APP_IGNORE_DEFAULT_ARGS,
         "APP_IGNORE_DEFAULT_ARGS"
+      ),
+      humanize: parseBoolean(
+        parsedEnvironment.data.APP_HUMANIZE,
+        true,
+        "APP_HUMANIZE"
+      ),
+      uaSpoof: parseBoolean(
+        parsedEnvironment.data.APP_UA_SPOOF,
+        true,
+        "APP_UA_SPOOF"
       )
     },
     navigation: {

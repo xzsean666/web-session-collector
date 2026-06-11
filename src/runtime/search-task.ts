@@ -27,6 +27,8 @@ export interface SearchTaskOptions {
   readonly fetchContent: boolean;
   // 调用方已采集过的笔记 id;命中的会被提前剔除,不打开详情页、也不返回。
   readonly excludeItemIds: readonly string[];
+  // 拟人化开关;不传时由持有 runtimeConfig 的入口按 APP_HUMANIZE 注入,默认 true。
+  readonly humanize?: boolean;
 }
 
 // 详情页富集之间的间隔,降低触发验证码的概率。
@@ -82,7 +84,11 @@ export async function runSearchTaskWithNewBrowser(
       }
     );
 
-    return runSearchTaskOnPage(pageSession, options, logger);
+    return runSearchTaskOnPage(
+      pageSession,
+      { ...options, humanize: options.humanize ?? runtimeConfig.browser.humanize },
+      logger
+    );
   } finally {
     if (pageSession !== undefined) {
       await closePageSession(pageSession, logger);
@@ -114,7 +120,8 @@ export async function runSearchTaskOnPage(
         keyword,
         scrollCount: options.scrollCount,
         recentDays: options.recentDays,
-        limitPerKeyword: options.limitPerKeyword
+        limitPerKeyword: options.limitPerKeyword,
+        humanize: options.humanize ?? true
       },
       logger
     );

@@ -4,6 +4,8 @@ export interface SearchInput {
   // 用于"够了就停"的滚动早停:范围内笔记数达到 limitPerKeyword 就不再滚。
   readonly recentDays: number;
   readonly limitPerKeyword: number;
+  // 拟人化开关:随机化滚动/停顿,并优先走「首页打字搜索」入口(站点支持时)。
+  readonly humanize: boolean;
 }
 
 export interface RawSearchItem {
@@ -55,6 +57,13 @@ export interface SearchSiteAdapter {
   readonly displayName: string;
   readonly targetHostSuffix: string | undefined;
   buildSearchUrl(keyword: string): string;
+  // 「拟人」搜索入口:回首页 → 点搜索框 → 逐字输入 → 回车。只有支持的站点实现。
+  // 返回 true 表示已成功进入搜索结果页;返回 false 时调用方回退到直接 goto 搜索 URL。
+  performHumanSearch?(
+    pageSession: import("../context/page-session.js").PageSession,
+    keyword: string,
+    logger: import("pino").Logger
+  ): Promise<boolean>;
   waitForSearchResults(pageSession: import("../context/page-session.js").PageSession): Promise<void>;
   dismissKnownNotices(pageSession: import("../context/page-session.js").PageSession): Promise<void>;
   extractSearchItems(pageSession: import("../context/page-session.js").PageSession): Promise<readonly RawSearchItem[]>;

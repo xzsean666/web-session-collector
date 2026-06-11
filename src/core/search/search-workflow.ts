@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { PageSession } from "../context/page-session.js";
+import { humanPause, humanScroll } from "../browser/human-actions.js";
 import type {
   RawSearchItem,
   SearchInput,
@@ -31,15 +32,42 @@ export async function runSearchWorkflow(
     "Search workflow started."
   );
 
-  await navigateToSearchUrl(
-    pageSession,
-    searchUrl,
-    siteAdapter.siteKey,
-    input.keyword,
-    logger
-  );
+  // 优先走「拟人」入口(回首页打字搜索),失败再回退到直接 goto 搜索 URL。
+  let enteredByHuman = false;
+  if (input.humanize && siteAdapter.performHumanSearch !== undefined) {
+    enteredByHuman = await siteAdapter
+      .performHumanSearch(pageSession, input.keyword, logger)
+      .catch(() => false);
+    logger.info(
+      {
+        module: "core_search",
+        stage: enteredByHuman ? "human_search_entered" : "human_search_fallback",
+        siteKey: siteAdapter.siteKey,
+        keyword: input.keyword
+      },
+      enteredByHuman
+        ? "Entered search via human-like typing flow."
+        : "Human search flow unavailable; falling back to direct navigation."
+    );
+  }
+
+  if (!enteredByHuman) {
+    await navigateToSearchUrl(
+      pageSession,
+      searchUrl,
+      siteAdapter.siteKey,
+      input.keyword,
+      logger
+    );
+  }
+
   await siteAdapter.dismissKnownNotices(pageSession);
   await siteAdapter.waitForSearchResults(pageSession);
+
+  // 结果出来后先「扫一眼」再操作,避免落地即点的机器节奏。
+  if (input.humanize) {
+    await humanPause(pageSession.page, 700, 1_600);
+  }
 
   // 尽量切到「最新」排序:结果按时间倒序,近期帖在最前面,源头就近似过滤。
   let sortedByTime = false;
@@ -62,10 +90,15 @@ export async function runSearchWorkflow(
   }
 
   for (let scrollIndex = 0; scrollIndex < input.scrollCount; scrollIndex += 1) {
-    await pageSession.page.evaluate(() => {
-      window.scrollBy(0, Math.floor(window.innerHeight * 1.8));
-    });
-    await pageSession.page.waitForTimeout(1_200);
+    if (input.humanize) {
+      // 拟人滚动:真实 wheel 事件、分步、随机步长与停顿、偶尔回滚。
+      await humanScroll(pageSession.page);
+    } else {
+      await pageSession.page.evaluate(() => {
+        window.scrollBy(0, Math.floor(window.innerHeight * 1.8));
+      });
+      await pageSession.page.waitForTimeout(1_200);
+    }
     await siteAdapter.dismissKnownNotices(pageSession);
 
     if (input.recentDays > 0) {

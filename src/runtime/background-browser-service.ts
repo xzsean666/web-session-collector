@@ -635,7 +635,10 @@ export class BackgroundBrowserService {
     try {
       const result = await runSearchTaskOnPage(
         pageSession,
-        options,
+        {
+          ...options,
+          humanize: options.humanize ?? this.runtimeConfig.browser.humanize
+        },
         this.logger
       );
       const completedTask = this.completeTask(webSession, task, {

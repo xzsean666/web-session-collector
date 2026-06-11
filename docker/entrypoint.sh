@@ -4,6 +4,15 @@ set -euo pipefail
 APP_USER_DATA_DIR="${APP_USER_DATA_DIR:-/data/chrome-user-data}"
 mkdir -p "${APP_USER_DATA_DIR}"
 
+# 浏览器 channel 自适应:APP_BROWSER_CHANNEL=auto(或空)时,解析为构建时按架构探测的
+# 结果(/opt/browser-channel:x86 装了真 Chrome→chrome,arm→bundled)。设为具体 channel
+# 可强制覆盖。
+if [[ -z "${APP_BROWSER_CHANNEL:-}" || "${APP_BROWSER_CHANNEL}" == "auto" ]]; then
+  APP_BROWSER_CHANNEL="$(cat /opt/browser-channel 2>/dev/null || echo bundled)"
+  export APP_BROWSER_CHANNEL
+fi
+echo "Resolved APP_BROWSER_CHANNEL=${APP_BROWSER_CHANNEL} (arch $(uname -m))"
+
 # Remove stale Chromium singleton locks left behind when a previous container
 # was killed without a clean browser shutdown. The persistent profile volume
 # keeps these locks, which point at the old container's hostname/pid and make

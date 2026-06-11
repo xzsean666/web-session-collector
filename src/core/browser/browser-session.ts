@@ -2,6 +2,12 @@ import { chromium, type Browser, type BrowserContext } from "playwright";
 import type { Logger } from "pino";
 import type { BrowserRuntimeConfig, ProfileConfig } from "../types/runtime.js";
 import { serializeError } from "../monitoring/logger.js";
+import {
+  applyDesktopUaSpoof,
+  applyStealthInitScript,
+  STEALTH_EXTRA_FLAGS,
+  STEALTH_IGNORED_DEFAULT_ARGS
+} from "./stealth.js";
 
 export interface BrowserSession {
   readonly browserContext: BrowserContext;
@@ -65,6 +71,22 @@ async function launchPersistentBrowserContext(
     browserArgs.push(`--profile-directory=${browserConfig.profileDirectory}`);
   }
 
+  // 反自动化参数(总开关 humanize 控制):去掉「受自动化控制」的硬特征。
+  const ignoredDefaultArgs = [...browserConfig.ignoredDefaultArgs];
+
+  if (browserConfig.humanize) {
+    for (const flag of STEALTH_EXTRA_FLAGS) {
+      if (!browserArgs.includes(flag)) {
+        browserArgs.push(flag);
+      }
+    }
+    for (const arg of STEALTH_IGNORED_DEFAULT_ARGS) {
+      if (!ignoredDefaultArgs.includes(arg)) {
+        ignoredDefaultArgs.push(arg);
+      }
+    }
+  }
+
   const launchOptions: Parameters<
     typeof chromium.launchPersistentContext
   >[1] = {
@@ -86,8 +108,8 @@ async function launchPersistentBrowserContext(
     };
   }
 
-  if (browserConfig.ignoredDefaultArgs.length > 0) {
-    launchOptions.ignoreDefaultArgs = [...browserConfig.ignoredDefaultArgs];
+  if (ignoredDefaultArgs.length > 0) {
+    launchOptions.ignoreDefaultArgs = ignoredDefaultArgs;
   }
 
   if (browserConfig.executablePath !== undefined) {
@@ -100,6 +122,16 @@ async function launchPersistentBrowserContext(
     profileConfig.userDataDir,
     launchOptions
   );
+
+  if (browserConfig.humanize) {
+    await applyStealthInitScript(browserContext, logger);
+    if (browserConfig.uaSpoof) {
+      // 按容器架构选伪装目标,做到「架构不撒谎」:arm64 → macOS(Apple Silicon 即 arm),
+      // x64 → Windows(小红书 PC 用户绝大多数,且 x86 真实)。
+      const uaTarget = process.arch === "arm64" ? "macos" : "windows";
+      await applyDesktopUaSpoof(browserContext, uaTarget, logger);
+    }
+  }
 
   logger.info(
     {
@@ -139,6 +171,12 @@ async function connectToExistingBrowserContext(
   if (browserContext === undefined) {
     await browser.close();
     throw new Error("Connected browser did not expose a default context.");
+  }
+
+  // connect 模式下追加的浏览器参数无法控制(浏览器是外部启动的),但 init script
+  // 仍会对后续导航/新开页面生效,可抹掉 navigator.webdriver 等标记。
+  if (browserConfig.humanize) {
+    await applyStealthInitScript(browserContext, logger);
   }
 
   logger.info(

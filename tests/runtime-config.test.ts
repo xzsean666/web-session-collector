@@ -102,6 +102,8 @@ test("loadRuntimeConfig applies safe defaults", () => {
     assert.equal(runtimeConfig.browser.idleDisplay, undefined);
     assert.deepEqual(runtimeConfig.browser.flags, []);
     assert.deepEqual(runtimeConfig.browser.ignoredDefaultArgs, []);
+    assert.equal(runtimeConfig.browser.humanize, true);
+    assert.equal(runtimeConfig.browser.uaSpoof, true);
     assert.equal(
       runtimeConfig.navigation.startUrl,
       "https://www.xiaohongshu.com/"
@@ -111,6 +113,22 @@ test("loadRuntimeConfig applies safe defaults", () => {
     assert.equal(runtimeConfig.runtime.interactiveLoginOnMissingUser, false);
     assert.equal(runtimeConfig.runtime.startupSessionId, "default");
     assert.equal(runtimeConfig.runtime.startupIdleSessionId, undefined);
+  } finally {
+    rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("loadRuntimeConfig parses APP_HUMANIZE override", () => {
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "app-profile-"));
+
+  try {
+    const runtimeConfig = loadRuntimeConfig({
+      APP_USER_DATA_DIR: userDataDir,
+      APP_PROFILE_NAME: "automation-profile",
+      APP_HUMANIZE: "false"
+    });
+
+    assert.equal(runtimeConfig.browser.humanize, false);
   } finally {
     rmSync(userDataDir, { recursive: true, force: true });
   }

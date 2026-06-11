@@ -1,5 +1,13 @@
 import type { Locator } from "playwright";
+import type { Logger } from "pino";
 import type { PageSession } from "../../core/context/page-session.js";
+import {
+  humanClick,
+  humanClickAt,
+  humanMouseMoveTo,
+  humanPause,
+  humanType
+} from "../../core/browser/human-actions.js";
 import type {
   NoteDetail,
   RawSearchItem,
@@ -7,11 +15,14 @@ import type {
   SearchSiteAdapter
 } from "../../core/search/search-types.js";
 
+const HOME_URL = "https://www.xiaohongshu.com/";
+
 export const xiaohongshuSearchAdapter: SearchSiteAdapter = {
   siteKey: "xiaohongshu",
   displayName: "小红书",
   targetHostSuffix: "xiaohongshu.com",
   buildSearchUrl,
+  performHumanSearch,
   waitForSearchResults,
   dismissKnownNotices,
   extractSearchItems,
@@ -26,6 +37,71 @@ function buildSearchUrl(keyword: string): string {
   searchUrl.searchParams.set("source", "web_search_result_notes");
   searchUrl.searchParams.set("type", "51");
   return searchUrl.toString();
+}
+
+// 「拟人」搜索入口:回首页 → 拟人点搜索框 → 逐字输入关键词 → 回车,
+// 模拟真人从首页发起搜索的路径(比直接拼 /search_result URL 更不易触发行为风控)。
+// 任一步失败都返回 false,由 workflow 回退到直接 goto。
+async function performHumanSearch(
+  pageSession: PageSession,
+  keyword: string,
+  logger: Logger
+): Promise<boolean> {
+  const page = pageSession.page;
+
+  try {
+    // 不在站内就先回首页;已在小红书任意页则就地发起搜索。
+    if (!/(^|\.)xiaohongshu\.com$/.test(safeHostname(page.url()))) {
+      await page.goto(HOME_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000
+      });
+      await humanPause(page, 800, 1_800);
+    }
+
+    const searchInput = page
+      .locator(
+        "#search-input, input#search-input, input[placeholder*='搜索'], input[type='search']"
+      )
+      .first();
+    await searchInput.waitFor({ state: "visible", timeout: 6_000 });
+
+    await humanClick(page, searchInput);
+    await humanPause(page, 200, 500);
+
+    // 清掉搜索框里可能的残留(上次关键词 / 占位推荐词)。
+    await page.keyboard.press("ControlOrMeta+A").catch(() => undefined);
+    await page.keyboard.press("Delete").catch(() => undefined);
+
+    await humanType(page, searchInput, keyword);
+    await humanPause(page, 300, 800);
+    await page.keyboard.press("Enter");
+
+    await page
+      .waitForURL(/\/search_result/, { timeout: 15_000 })
+      .catch(() => undefined);
+
+    return /\/search_result/.test(page.url());
+  } catch (error) {
+    logger.warn(
+      {
+        module: "site_xiaohongshu",
+        stage: "human_search_failed",
+        keyword,
+        error: error instanceof Error ? error.message : String(error)
+      },
+      "Human search flow failed; will fall back to direct navigation."
+    );
+    return false;
+  }
+}
+
+function safeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
 async function waitForSearchResults(pageSession: PageSession): Promise<void> {
@@ -162,8 +238,8 @@ async function sortByLatest(pageSession: PageSession): Promise<boolean> {
       return false;
     }
 
-    await page.mouse.move(filterBox.x, filterBox.y);
-    await page.waitForTimeout(1_200);
+    await humanMouseMoveTo(page, filterBox.x, filterBox.y);
+    await humanPause(page, 900, 1_500);
 
     const latestBox = await page.evaluate(() => {
       const spans = Array.from(document.querySelectorAll("span")).filter(
@@ -182,10 +258,8 @@ async function sortByLatest(pageSession: PageSession): Promise<boolean> {
       return false;
     }
 
-    await page.mouse.move(latestBox.x, latestBox.y);
-    await page.waitForTimeout(200);
-    await page.mouse.click(latestBox.x, latestBox.y);
-    await page.waitForTimeout(2_500);
+    await humanClickAt(page, latestBox.x, latestBox.y);
+    await humanPause(page, 2_000, 3_000);
     return true;
   } catch {
     return false;

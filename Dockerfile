@@ -23,6 +23,21 @@ RUN corepack enable \
   && corepack prepare pnpm@10.12.1 --activate \
   && pnpm install --frozen-lockfile
 
+# 跨架构浏览器选择:
+# - amd64(x86_64):安装真 Google Chrome(带专有编解码器 / Widevine、品牌标识一致,
+#   指纹更接近普通用户),channel 记为 chrome。
+# - arm64(aarch64):Google 不发布 Linux ARM 版 Chrome,只能用 Playwright 自带的
+#   Chromium,channel 记为 bundled。
+# 探测结果写入 /opt/browser-channel,由 entrypoint 解析 APP_BROWSER_CHANNEL=auto。
+RUN ARCH="$(dpkg --print-architecture)" \
+  && if [ "$ARCH" = "amd64" ]; then \
+       pnpm exec playwright install chrome \
+       && echo chrome > /opt/browser-channel; \
+     else \
+       echo "Architecture $ARCH: Google Chrome unavailable, using bundled Chromium." \
+       && echo bundled > /opt/browser-channel; \
+     fi
+
 COPY . .
 RUN pnpm run build \
   && pnpm prune --prod
@@ -45,7 +60,10 @@ ENV APP_USER_DATA_DIR=/data/chrome-user-data
 ENV APP_PROFILE_NAME=docker-xiaohongshu
 ENV APP_BROWSER_MODE=launch
 ENV APP_HEADLESS=false
-ENV APP_BROWSER_CHANNEL=bundled
+# auto = 由 entrypoint 按构建时探测结果(/opt/browser-channel)解析为 chrome / bundled。
+# 也可在 compose / .env 里设为具体 channel 强制覆盖。
+ENV APP_BROWSER_CHANNEL=auto
+ENV APP_UA_SPOOF=true
 ENV APP_EXECUTABLE_PATH=
 ENV APP_PROFILE_DIRECTORY=Default
 ENV APP_LOCALE=zh-CN

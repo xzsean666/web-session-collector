@@ -48,6 +48,11 @@ export interface BrowserRuntimeConfig {
   readonly idleDisplay: string | undefined;
   readonly flags: readonly string[];
   readonly ignoredDefaultArgs: readonly string[];
+  // 反自动化遮蔽 + 人性化行为的总开关(APP_HUMANIZE,默认开)。
+  readonly humanize: boolean;
+  // 桌面 UA/平台伪装(APP_UA_SPOOF,默认开):把 Linux aarch64 伪装成 Windows Chrome。
+  // 仅在 humanize 同时开启、且 launch 模式下生效。是最易因不一致而招事的一项,故单独开关。
+  readonly uaSpoof: boolean;
 }
 
 export interface RuntimeBehaviorConfig {

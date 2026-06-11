@@ -23,7 +23,8 @@ services:
       APP_PROFILE_NAME: docker-xiaohongshu
       APP_BROWSER_MODE: launch
       APP_HEADLESS: "false"
-      APP_BROWSER_CHANNEL: bundled
+      # auto = entrypoint 按架构解析(x86→chrome, arm→bundled);也可填具体 channel 强制。
+      APP_BROWSER_CHANNEL: auto
       APP_EXECUTABLE_PATH: ""
       APP_PROFILE_DIRECTORY: Default
       APP_LOCALE: zh-CN
@@ -35,6 +36,9 @@ services:
       APP_LOG_LEVEL: info
       APP_KEEP_BROWSER_ALIVE: "false"
       APP_INTERACTIVE_LOGIN_ON_MISSING_USER: "false"
+      APP_HUMANIZE: "true"
+      # 桌面 UA/平台伪装(arm→macOS, x64→Windows)。如发现伪装反招风控可设 "false" 关闭。
+      APP_UA_SPOOF: "true"
       APP_STARTUP_SESSION_ID: "${APP_STARTUP_SESSION_ID:-default}"
       APP_STARTUP_IDLE_SESSION_ID: "${APP_STARTUP_IDLE_SESSION_ID:-}"
       APP_BROWSER_FLAGS: '["--no-first-run","--no-default-browser-check","--disable-dev-shm-usage","--no-sandbox"]'
