@@ -27,6 +27,7 @@
 #   FAILOVER          active session 失效时是否自动切换到可用备用 session (默认 1)
 #   SESSION_RESTART   failover 前是否先重启当前 session 浏览器尝试恢复 (默认 1)
 #   SESSION_RECOVERY_RETRIES / SESSION_RESTART_WAIT  重启恢复次数 / 重启后等待秒数 (默认 1 / 5)
+#   SESSION_PREFLIGHT 搜索前是否强制检查登录态;0=搜索优先,失败再恢复 (默认 0)
 #
 set -uo pipefail
 
@@ -60,6 +61,7 @@ FAILOVER="${FAILOVER:-1}"
 SESSION_RESTART="${SESSION_RESTART:-1}"
 SESSION_RECOVERY_RETRIES="${SESSION_RECOVERY_RETRIES:-1}"
 SESSION_RESTART_WAIT="${SESSION_RESTART_WAIT:-5}"
+SESSION_PREFLIGHT="${SESSION_PREFLIGHT:-0}"
 
 NOTES_FILE="${DATA_DIR}/notes.jsonl"
 SEEN_FILE="${DATA_DIR}/seen_ids.txt"
@@ -518,7 +520,7 @@ restart_session_browser() {
   sleep "${SESSION_RESTART_WAIT}"
   state="$(session_state_for "${session_id}")"
   log "重启后 session ${session_id} state=${state}"
-  [ "${state}" = "logged_in" ]
+  [ -n "${state}" ] && ! is_blocking_session_state "${state}"
 }
 
 recover_active_session() {
@@ -599,38 +601,45 @@ run_cycle() {
     return 1
   fi
 
-  # 2) 登录态检查
+  # 2) 登录态检查。默认搜索优先:只把搜索 API 的实际失败当成恢复触发条件。
   local state active_session_id status_body
   status_body="$(curl -fsS -m 10 "${BASE_URL}/api/status" 2>/dev/null || true)"
   state="$(printf '%s' "${status_body}" | read_session_state_from_status)"
   active_session_id="$(printf '%s' "${status_body}" | read_active_session_id_from_status)"
 
-  if [ "${state}" != "logged_in" ]; then
-    log "登录态缓存为 state=${state},主动刷新一次"
-    state="$(refresh_session_state)"
-  fi
+  case "${SESSION_PREFLIGHT}" in
+    1|true|TRUE|yes|YES)
+      if [ "${state}" != "logged_in" ]; then
+        log "登录态缓存为 state=${state},主动刷新一次"
+        state="$(refresh_session_state)"
+      fi
 
-  if is_blocking_session_state "${state}"; then
-    if recover_active_session "${state}" "${active_session_id}"; then
-      state="$(refresh_session_state)"
-      active_session_id="$(current_active_session_id)"
-      log "切换后 active session state=${state}"
-    else
-      log "⚠️ 账号未登录(state=${state}),且没有可用备用 session,跳过本轮"
-      send_slack "🟠 采集跳过:账号未登录 (state=${state}),自动恢复和 failover 都失败。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
-      return 1
-    fi
-  fi
+      if is_blocking_session_state "${state}"; then
+        if recover_active_session "${state}" "${active_session_id}"; then
+          state="$(refresh_session_state)"
+          active_session_id="$(current_active_session_id)"
+          log "切换后 active session state=${state}"
+        else
+          log "⚠️ 账号未登录(state=${state}),且没有可用备用 session,跳过本轮"
+          send_slack "🟠 采集跳过:账号未登录 (state=${state}),自动恢复和 failover 都失败。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
+          return 1
+        fi
+      fi
 
-  if is_blocking_session_state "${state}"; then
-    log "⚠️ 切换后账号仍不可用(state=${state}),跳过本轮"
-    send_slack "🟠 采集跳过:切换后账号仍不可用 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
-    return 1
-  fi
+      if is_blocking_session_state "${state}"; then
+        log "⚠️ 切换后账号仍不可用(state=${state}),跳过本轮"
+        send_slack "🟠 采集跳过:切换后账号仍不可用 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
+        return 1
+      fi
 
-  if [ "${state}" != "logged_in" ]; then
-    log "⚠️ 登录态无法确认(state=${state}),继续尝试搜索"
-  fi
+      if [ "${state}" != "logged_in" ]; then
+        log "⚠️ 登录态无法确认(state=${state}),继续尝试搜索"
+      fi
+      ;;
+    *)
+      log "搜索优先:跳过登录态前置拦截(state=${state}),由搜索结果决定是否恢复"
+      ;;
+  esac
 
   export WSC_SESSION_NOTICE="$(session_slack_notice)"
 

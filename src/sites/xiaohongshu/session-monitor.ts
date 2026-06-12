@@ -111,7 +111,9 @@ export async function inspectXiaohongshuSession(
 
   if (!challengeDetected) {
     try {
-      currentAccount = await getCurrentAccountAction(pageSession, logger);
+      currentAccount = await getCurrentAccountAction(pageSession, logger, {
+        allowPartialFromProfileLink: true
+      });
     } catch (error) {
       accountErrorMessage =
         error instanceof Error ? error.message : String(error);
