@@ -16,6 +16,12 @@ interface IndicatorRule {
   readonly pattern: RegExp;
 }
 
+interface PageSnapshot {
+  readonly url: string;
+  readonly title: string;
+  readonly text: string;
+}
+
 const challengeRules: readonly IndicatorRule[] = [
   {
     code: "security_verification",
@@ -90,7 +96,12 @@ export async function inspectXiaohongshuSession(
     };
   }
 
-  const pageSnapshot = await readPageSnapshot(pageSession);
+  let pageSnapshot = await readPageSnapshot(pageSession);
+
+  if (await returnHomeFromSafetyRestrictionIfNeeded(pageSession, pageSnapshot, logger)) {
+    pageSnapshot = await readPageSnapshot(pageSession);
+  }
+
   const indicators = findSessionIndicators(pageSnapshot);
   const challengeDetected = indicators.some(
     (indicator) => indicator.severity === "critical"
@@ -116,7 +127,19 @@ export async function inspectXiaohongshuSession(
     }
   }
 
-  const refreshedPageSnapshot = await readPageSnapshot(pageSession);
+  let refreshedPageSnapshot = await readPageSnapshot(pageSession);
+
+  if (
+    await returnHomeFromSafetyRestrictionIfNeeded(
+      pageSession,
+      refreshedPageSnapshot,
+      logger
+    )
+  ) {
+    refreshedPageSnapshot = await readPageSnapshot(pageSession);
+    accountErrorMessage = undefined;
+  }
+
   const refreshedIndicators = mergeIndicators(
     indicators,
     findSessionIndicators(refreshedPageSnapshot)
@@ -138,9 +161,7 @@ export async function inspectXiaohongshuSession(
   };
 }
 
-async function readPageSnapshot(
-  pageSession: PageSession
-): Promise<{ readonly url: string; readonly title: string; readonly text: string }> {
+async function readPageSnapshot(pageSession: PageSession): Promise<PageSnapshot> {
   const [title, text] = await Promise.all([
     pageSession.page.title().catch(() => ""),
     pageSession.page
@@ -156,15 +177,88 @@ async function readPageSnapshot(
   };
 }
 
+async function returnHomeFromSafetyRestrictionIfNeeded(
+  pageSession: PageSession,
+  snapshot: PageSnapshot,
+  logger: Logger
+): Promise<boolean> {
+  if (!isReturnHomeSafetyRestriction(snapshot)) {
+    return false;
+  }
+
+  try {
+    logger.warn(
+      {
+        module: "session_monitor",
+        siteKey: "xiaohongshu",
+        stage: "safety_restriction_return_home_started",
+        pageUrl: snapshot.url,
+        pageTitle: snapshot.title
+      },
+      "Xiaohongshu safety restriction page detected; clicking return home once."
+    );
+
+    await pageSession.page.getByText("返回首页", { exact: true }).click({
+      timeout: 3_000
+    });
+    await pageSession.page
+      .waitForURL((pageUrl) => !isSafetyRestrictionUrl(pageUrl.toString()), {
+        timeout: 10_000
+      })
+      .catch(() => undefined);
+    await pageSession.page
+      .waitForLoadState("domcontentloaded", { timeout: 10_000 })
+      .catch(() => undefined);
+    await pageSession.page.waitForTimeout(1_000);
+
+    logger.info(
+      {
+        module: "session_monitor",
+        siteKey: "xiaohongshu",
+        stage: "safety_restriction_return_home_completed",
+        pageUrl: pageSession.page.url()
+      },
+      "Returned from Xiaohongshu safety restriction page."
+    );
+
+    return true;
+  } catch (error) {
+    logger.warn(
+      {
+        module: "session_monitor",
+        siteKey: "xiaohongshu",
+        stage: "safety_restriction_return_home_failed",
+        pageUrl: snapshot.url,
+        pageTitle: snapshot.title,
+        error: serializeError(error)
+      },
+      "Failed to click return home on Xiaohongshu safety restriction page."
+    );
+
+    return false;
+  }
+}
+
+function isReturnHomeSafetyRestriction(snapshot: PageSnapshot): boolean {
+  const haystack = `${snapshot.url}\n${snapshot.title}\n${snapshot.text}`;
+
+  return (
+    isSafetyRestrictionUrl(snapshot.url) &&
+    /(?:[?&]error_code=300011\b|300011)/.test(haystack) &&
+    /安全限制/.test(haystack) &&
+    /返回首页/.test(snapshot.text)
+  );
+}
+
+function isSafetyRestrictionUrl(pageUrl: string): boolean {
+  return /\/website-login\/error/.test(pageUrl);
+}
+
 function normalizeVisibleText(text: string): string {
   return text.replace(/\s+/g, " ").slice(0, 20_000);
 }
 
-function findSessionIndicators(snapshot: {
-  readonly url: string;
-  readonly title: string;
-  readonly text: string;
-}): readonly SessionIndicator[] {
+function findSessionIndicators(snapshot: PageSnapshot): readonly SessionIndicator[] {
   const haystack = `${snapshot.url}\n${snapshot.title}\n${snapshot.text}`;
   const indicators: SessionIndicator[] = [];
 

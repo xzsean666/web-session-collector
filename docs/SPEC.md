@@ -448,6 +448,8 @@ Expected behavior:
 - reports `challenge_required` when verification, captcha, frequent-access, or
   account-risk prompts are detected
 - reports `browser_closed` when the page is no longer available
+- for Xiaohongshu `browser_closed` or `error`, restarts the same web session
+  once and inspects again before reporting the session as abnormal
 - detects and reports only; it must not solve captcha, automate login, or bypass
   verification
 
@@ -671,7 +673,8 @@ Recoverable errors:
 Current phase behavior:
 
 - log clearly
-- no retry unless retry policy is implemented
+- for Xiaohongshu web-session `browser_closed` or `error`, restart the same web
+  session once before reporting the session as abnormal
 
 Non-recoverable errors:
 

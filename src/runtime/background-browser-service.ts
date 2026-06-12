@@ -194,9 +194,14 @@ interface ManagedWebSession {
   lastMonitorCheckCompletedAt: string | undefined;
   lastMonitorSkippedReason: string | undefined;
   lastError: Readonly<Record<string, unknown>> | undefined;
+  webSessionRecoveryAttempted: boolean;
 }
 
 const DEFAULT_SESSION_ID = "default";
+const AUTO_RESTART_SESSION_STATES: readonly SessionState[] = [
+  "browser_closed",
+  "error"
+];
 
 export class BackgroundBrowserService {
   private readonly runtimeConfig: RuntimeConfig;
@@ -399,12 +404,11 @@ export class BackgroundBrowserService {
     }
 
     try {
-      await this.closeSessionBrowserResources(session, "session_restarted");
-      session.pageSession = undefined;
-      session.browserSession = undefined;
-
-      await this.openSessionBrowser(session);
-      await this.refreshSessionStatus(session, "session_restarted");
+      session.webSessionRecoveryAttempted = false;
+      await this.restartSessionBrowser(session, "session_restarted");
+      await this.refreshSessionStatus(session, "session_restarted", {
+        allowWebSessionRestart: false
+      });
       session.updatedAt = new Date().toISOString();
       await this.bringSessionToFront(session);
 
@@ -558,26 +562,13 @@ export class BackgroundBrowserService {
     options: SearchTaskOptions,
     sessionId = this.apiActiveSessionId
   ): Promise<SearchDispatchResult> {
-    const session = this.resolveRunnableSession(sessionId);
+    const session = this.resolveManagedSession(sessionId);
 
     if (!session.accepted) {
       return session;
     }
 
     const webSession = session.session;
-    const pageSession = webSession.pageSession;
-
-    if (pageSession === undefined || pageSession.page.isClosed()) {
-      return {
-        accepted: false,
-        reason: "service_not_ready",
-        statusCode: 503,
-        message: `Session "${webSession.id}" is not ready.`,
-        activeTask: webSession.activeTask,
-        session: webSession.sessionInspection,
-        webSession: await this.snapshotSession(webSession)
-      };
-    }
 
     if (webSession.activeTask !== undefined) {
       return {
@@ -603,6 +594,8 @@ export class BackgroundBrowserService {
       };
     }
 
+    await this.refreshWebSessionIssueBeforeTask(webSession, "before_search");
+
     const blockedMessage = this.readAccountAttentionMessage(webSession);
 
     if (blockedMessage !== undefined) {
@@ -613,6 +606,20 @@ export class BackgroundBrowserService {
           webSession.sessionInspection?.state === "logged_out" ? 428 : 423,
         message: blockedMessage,
         activeTask: undefined,
+        session: webSession.sessionInspection,
+        webSession: await this.snapshotSession(webSession)
+      };
+    }
+
+    const pageSession = webSession.pageSession;
+
+    if (pageSession === undefined || pageSession.page.isClosed()) {
+      return {
+        accepted: false,
+        reason: "service_not_ready",
+        statusCode: 503,
+        message: `Session "${webSession.id}" is not ready.`,
+        activeTask: webSession.activeTask,
         session: webSession.sessionInspection,
         webSession: await this.snapshotSession(webSession)
       };
@@ -695,7 +702,7 @@ export class BackgroundBrowserService {
     reason = "manual",
     sessionId = this.apiActiveSessionId
   ): Promise<SessionCheckDispatchResult> {
-    const session = this.resolveRunnableSession(sessionId);
+    const session = this.resolveManagedSession(sessionId);
 
     if (!session.accepted) {
       return {
@@ -814,7 +821,8 @@ export class BackgroundBrowserService {
       lastMonitorCheckStartedAt: undefined,
       lastMonitorCheckCompletedAt: undefined,
       lastMonitorSkippedReason: undefined,
-      lastError: undefined
+      lastError: undefined,
+      webSessionRecoveryAttempted: false
     };
 
     this.sessions.set(sessionId, session);
@@ -943,6 +951,18 @@ export class BackgroundBrowserService {
     );
   }
 
+  private async restartSessionBrowser(
+    session: ManagedWebSession,
+    reason: string
+  ): Promise<void> {
+    await this.closeSessionBrowserResources(session, reason);
+    session.pageSession = undefined;
+    session.browserSession = undefined;
+
+    await this.openSessionBrowser(session);
+    session.updatedAt = new Date().toISOString();
+  }
+
   private async rejectDesktopMoveWhenBusy(
     session: ManagedWebSession
   ): Promise<WebSessionOperationResult | undefined> {
@@ -1021,7 +1041,7 @@ export class BackgroundBrowserService {
     return normalizedSessionId;
   }
 
-  private resolveRunnableSession(
+  private resolveManagedSession(
     sessionId: string | undefined
   ):
     | { readonly accepted: true; readonly session: ManagedWebSession }
@@ -1072,18 +1092,6 @@ export class BackgroundBrowserService {
       };
     }
 
-    if (session.pageSession === undefined || session.pageSession.page.isClosed()) {
-      return {
-        accepted: false,
-        reason: "service_not_ready",
-        statusCode: 503,
-        message: `Session "${sessionId}" is not ready.`,
-        activeTask: session.activeTask,
-        session: session.sessionInspection,
-        webSession: undefined
-      };
-    }
-
     return {
       accepted: true,
       session
@@ -1091,6 +1099,25 @@ export class BackgroundBrowserService {
   }
 
   private async refreshSessionStatus(
+    session: ManagedWebSession,
+    reason = "manual",
+    options: { readonly allowWebSessionRestart?: boolean } = {}
+  ): Promise<SessionInspectionResult> {
+    const inspection = await this.inspectSessionStatusOnce(session, reason);
+    const allowWebSessionRestart = options.allowWebSessionRestart ?? true;
+
+    if (
+      allowWebSessionRestart &&
+      this.shouldAutoRestartWebSession(session, inspection)
+    ) {
+      return this.restartWebSessionOnceAfterIssue(session, reason, inspection);
+    }
+
+    this.updateWebSessionRecoveryState(session, inspection);
+    return inspection;
+  }
+
+  private async inspectSessionStatusOnce(
     session: ManagedWebSession,
     reason = "manual"
   ): Promise<SessionInspectionResult> {
@@ -1153,8 +1180,8 @@ export class BackgroundBrowserService {
         siteKey: this.runtimeSiteAdapter.siteKey,
         state: "error",
         checkedAt: new Date().toISOString(),
-        pageUrl: session.pageSession.page.url(),
-        pageTitle: await session.pageSession.page.title().catch(() => ""),
+        pageUrl: this.readSessionPageUrl(session),
+        pageTitle: await this.readSessionPageTitle(session),
         currentAccount: undefined,
         indicators: [
           {
@@ -1165,6 +1192,110 @@ export class BackgroundBrowserService {
         ],
         errorMessage: error instanceof Error ? error.message : String(error)
       };
+      return session.sessionInspection;
+    }
+  }
+
+  private shouldAutoRestartWebSession(
+    session: ManagedWebSession,
+    inspection: SessionInspectionResult
+  ): boolean {
+    return (
+      this.runtimeSiteAdapter.siteKey === "xiaohongshu" &&
+      AUTO_RESTART_SESSION_STATES.includes(inspection.state) &&
+      !session.webSessionRecoveryAttempted
+    );
+  }
+
+  private updateWebSessionRecoveryState(
+    session: ManagedWebSession,
+    inspection: SessionInspectionResult
+  ): void {
+    if (!AUTO_RESTART_SESSION_STATES.includes(inspection.state)) {
+      session.webSessionRecoveryAttempted = false;
+    }
+  }
+
+  private async restartWebSessionOnceAfterIssue(
+    session: ManagedWebSession,
+    reason: string,
+    inspection: SessionInspectionResult
+  ): Promise<SessionInspectionResult> {
+    session.webSessionRecoveryAttempted = true;
+
+    this.logger.warn(
+      {
+        module: "background_service",
+        stage: "web_session_auto_restart_started",
+        reason,
+        sessionId: session.id,
+        state: inspection.state,
+        indicatorCodes: inspection.indicators.map((indicator) => indicator.code)
+      },
+      "Web session is abnormal; restarting once before reporting session status."
+    );
+
+    try {
+      await this.restartSessionBrowser(session, `auto_recovery_${reason}`);
+      const recoveredInspection = await this.refreshSessionStatus(
+        session,
+        `after_auto_recovery_${reason}`,
+        {
+          allowWebSessionRestart: false
+        }
+      );
+      await this.bringSessionToFront(session);
+
+      this.logger.info(
+        {
+          module: "background_service",
+          stage: "web_session_auto_restart_completed",
+          reason,
+          sessionId: session.id,
+          previousState: inspection.state,
+          state: recoveredInspection.state,
+          recovered: !AUTO_RESTART_SESSION_STATES.includes(
+            recoveredInspection.state
+          )
+        },
+        "Web session auto restart completed."
+      );
+
+      return recoveredInspection;
+    } catch (error) {
+      const checkedAt = new Date().toISOString();
+      session.lastError = serializeError(error);
+      session.updatedAt = checkedAt;
+      session.sessionInspection = {
+        siteKey: this.runtimeSiteAdapter.siteKey,
+        state: "error",
+        checkedAt,
+        pageUrl: this.readSessionPageUrl(session),
+        pageTitle: await this.readSessionPageTitle(session),
+        currentAccount: undefined,
+        indicators: [
+          ...inspection.indicators,
+          {
+            code: "web_session_restart_failed",
+            severity: "critical",
+            message: "Web session 自动重启失败。"
+          }
+        ],
+        errorMessage: error instanceof Error ? error.message : String(error)
+      };
+
+      this.logger.error(
+        {
+          module: "background_service",
+          stage: "web_session_auto_restart_failed",
+          reason,
+          sessionId: session.id,
+          previousState: inspection.state,
+          error: serializeError(error)
+        },
+        "Web session auto restart failed."
+      );
+
       return session.sessionInspection;
     }
   }
@@ -1229,11 +1360,6 @@ export class BackgroundBrowserService {
         continue;
       }
 
-      if (session.pageSession === undefined || session.pageSession.page.isClosed()) {
-        session.lastMonitorSkippedReason = "page_not_ready";
-        continue;
-      }
-
       session.monitorRunning = true;
 
       try {
@@ -1242,6 +1368,23 @@ export class BackgroundBrowserService {
         session.monitorRunning = false;
       }
     }
+  }
+
+  private async refreshWebSessionIssueBeforeTask(
+    session: ManagedWebSession,
+    reason: string
+  ): Promise<void> {
+    if (
+      session.pageSession !== undefined &&
+      !session.pageSession.page.isClosed() &&
+      !AUTO_RESTART_SESSION_STATES.includes(
+        session.sessionInspection?.state ?? "unknown"
+      )
+    ) {
+      return;
+    }
+
+    await this.refreshSessionStatus(session, reason);
   }
 
   private readAccountAttentionMessage(
@@ -1261,6 +1404,10 @@ export class BackgroundBrowserService {
 
     if (session.sessionInspection.state === "browser_closed") {
       return "Browser page is closed. Restart or recreate the session.";
+    }
+
+    if (session.sessionInspection.state === "error") {
+      return "Current browser session is still abnormal after one restart. Restart or recreate the session.";
     }
 
     return undefined;
@@ -1340,6 +1487,28 @@ export class BackgroundBrowserService {
       ],
       errorMessage: undefined
     };
+  }
+
+  private readSessionPageUrl(session: ManagedWebSession): string {
+    const page = session.pageSession?.page;
+
+    if (page === undefined || page.isClosed()) {
+      return "";
+    }
+
+    return page.url();
+  }
+
+  private async readSessionPageTitle(
+    session: ManagedWebSession
+  ): Promise<string> {
+    const page = session.pageSession?.page;
+
+    if (page === undefined || page.isClosed()) {
+      return "";
+    }
+
+    return page.title().catch(() => "");
   }
 
   private async bringSessionToFront(session: ManagedWebSession): Promise<void> {

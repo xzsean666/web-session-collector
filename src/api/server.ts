@@ -703,6 +703,10 @@ function responseErrorCode(
   }
 
   if (reason === "account_attention_required") {
+    if (sessionState === "browser_closed" || sessionState === "error") {
+      return "session_error";
+    }
+
     if (sessionState === "logged_out") {
       return "login_required";
     }

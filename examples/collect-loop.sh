@@ -16,6 +16,7 @@
 #   BASE_URL          API 地址            (默认 http://100.90.168.1:10085)
 #   IDLE_NOVNC_URL   idle noVNC 地址(提醒用) (默认 http://100.90.168.1:10087/vnc.html)
 #   SLACK_WEBHOOK_URL Slack Incoming Webhook;未设置则跳过通知
+#   SLACK_EACH_SESSION_NOTICE 逐条新笔记通知是否附带 session 提示 (默认 0)
 #   DATA_DIR          数据目录            (默认 <仓库>/data)
 #   KEYWORDS_FILE     关键词文件          (默认 <脚本目录>/keywords.txt)
 #   KEYWORDS          关键词字符串(逗号或空格分隔),优先级低于命令行参数
@@ -45,6 +46,7 @@ fi
 BASE_URL="${BASE_URL:-http://100.90.168.1:10085}"
 IDLE_NOVNC_URL="${IDLE_NOVNC_URL:-http://100.90.168.1:10087/vnc.html}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+SLACK_EACH_SESSION_NOTICE="${SLACK_EACH_SESSION_NOTICE:-0}"
 DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
 KEYWORDS_FILE="${KEYWORDS_FILE:-${SCRIPT_DIR}/keywords.txt}"
 INTERVAL="${INTERVAL:-1800}"
@@ -121,6 +123,7 @@ cat > "${PYHELPER}" <<'PY'
 # argv: <seen_file> <notes_file> <collectedAt>
 # 环境变量:SLACK_WEBHOOK_URL;SLACK_EACH(默认1,逐条发送开关);
 #           SLACK_EACH_MAX(默认50,每轮逐条发送上限);SLACK_EACH_DELAY(默认1,逐条间隔秒)
+#           SLACK_EACH_SESSION_NOTICE(默认0,逐条通知是否附带 session 提示)
 import json, os, sys, time, urllib.request
 
 seen_file, notes_file, ts = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -129,9 +132,10 @@ each = os.environ.get("SLACK_EACH", "1").strip().lower() not in ("", "0", "false
 each_max = int(os.environ.get("SLACK_EACH_MAX", "50") or 50)
 each_delay = float(os.environ.get("SLACK_EACH_DELAY", "1") or 1)
 session_notice = os.environ.get("WSC_SESSION_NOTICE", "").strip()
+each_session_notice = os.environ.get("SLACK_EACH_SESSION_NOTICE", "0").strip().lower() not in ("", "0", "false", "no")
 
 def post_slack(text):
-    if session_notice:
+    if each_session_notice and session_notice:
         text = text + "\n\n" + session_notice
     payload = json.dumps({"text": text}).encode("utf-8")
     req = urllib.request.Request(
@@ -219,11 +223,20 @@ log() {
 
 send_slack() {
   local msg="$1"
+  local include_session_notice="${2:-0}"
+  local notice=""
   if [ -z "${SLACK_WEBHOOK_URL}" ]; then
     log "(未配置 SLACK_WEBHOOK_URL,跳过 Slack 通知)"
     return 0
   fi
-  msg="${msg}"$'\n\n'"$(session_slack_notice)"
+  case "${include_session_notice}" in
+    1|true|TRUE|yes|YES|session)
+      notice="$(session_slack_notice)"
+      ;;
+  esac
+  if [ -n "${notice}" ]; then
+    msg="${msg}"$'\n\n'"${notice}"
+  fi
   local payload
   payload="$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "${msg}")"
   if ! curl -fsS -m 15 -X POST -H "Content-Type: application/json" \
@@ -251,7 +264,7 @@ session_slack_notice() {
     return 0
   fi
 
-  printf '%s' "Session: 本轮未发现 active session 失效。"
+  printf '%s' ""
 }
 
 all_bad_sessions_notice() {
@@ -582,7 +595,7 @@ run_cycle() {
     SESSION_FAILOVER_NOTICE="Session: 本轮无法检查 session 状态,API 不可达。"
     export WSC_SESSION_NOTICE="${SESSION_FAILOVER_NOTICE}"
     log "❌ API 不可达:${BASE_URL}"
-    send_slack "🔴 采集失败:API 不可达 (${BASE_URL})"
+    send_slack "🔴 采集失败:API 不可达 (${BASE_URL})" 1
     return 1
   fi
 
@@ -604,14 +617,14 @@ run_cycle() {
       log "切换后 active session state=${state}"
     else
       log "⚠️ 账号未登录(state=${state}),且没有可用备用 session,跳过本轮"
-      send_slack "🟠 采集跳过:账号未登录 (state=${state}),自动恢复和 failover 都失败。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
+      send_slack "🟠 采集跳过:账号未登录 (state=${state}),自动恢复和 failover 都失败。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
       return 1
     fi
   fi
 
   if is_blocking_session_state "${state}"; then
     log "⚠️ 切换后账号仍不可用(state=${state}),跳过本轮"
-    send_slack "🟠 采集跳过:切换后账号仍不可用 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}"
+    send_slack "🟠 采集跳过:切换后账号仍不可用 (state=${state})。请打开 idle noVNC 登录:${IDLE_NOVNC_URL}" 1
     return 1
   fi
 
@@ -681,7 +694,11 @@ run_cycle() {
   [ -n "${errors}" ] && msg="${msg}"$'\n'"🔴 API 请求失败: ${errors}"
 
   log "本轮完成:新增 ${total_new} 条,累计去重 ${total_seen} 条${errors:+,失败: ${errors}}"
-  send_slack "${msg}"
+  if [ -n "${errors}" ]; then
+    send_slack "${msg}" 1
+  else
+    send_slack "${msg}"
+  fi
   return 0
 }
 

@@ -344,6 +344,10 @@ Response shape:
 Search calls are synchronous and can take tens of seconds. A second task for the
 same session returns `409 task_busy`.
 
+When Xiaohongshu session inspection reports `browser_closed` or `error`, the
+service restarts that web session once and checks it again before returning the
+session as abnormal.
+
 ## Common Errors
 
 | HTTP | Code | Meaning |
@@ -352,6 +356,7 @@ same session returns `409 task_busy`.
 | `400` | `missing_keywords` | Search request did not include `keyword`, `q`, or `keywords`. |
 | `404` | `session_not_found` | Requested session id does not exist. |
 | `409` | `task_busy` | Target session already has a task or monitor running. |
+| `423` | `session_error` | Session is still abnormal after one automatic web-session restart. |
 | `423` | `verification_required` | Account needs manual verification. |
 | `428` | `login_required` | Account is logged out. |
 | `500` | `search_failed` | Search task failed after being accepted. |
